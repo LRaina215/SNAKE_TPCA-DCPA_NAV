@@ -1,4 +1,4 @@
-## 基于 TCPA-DCPA 风险场的全向 DWB 预测导航
+## 面向动态环境下移动机器人平滑预测导航的各向异性时空风险场
 
 #### 1. 理论源泉与模型“缝合”逻辑
 
@@ -226,7 +226,46 @@ Nav2 接入
 
 ## 论文具体
 
-### 🎨 绘制草案：图层与模块化布局 (Visual Layout)
+### 📝 论文结构蓝图 (预计 4-6 页，双栏排版)
+
+#### I. Introduction (引言) - *预计 1 页*
+
+这是整篇论文“圆谎”与“升华”的最重要阵地。
+
+- **动机 (Motivation)：** 强调在复杂地形或探索任务中，机器人（暗指蛇形等复杂机构）极其依赖**平滑且连续**的运动步态。频繁的急刹车会导致姿态失稳或能耗剧增。
+- **痛点 (Problem Statement)：** 抨击传统 DWB/DWA 算法的“时空错位”缺陷。它们仅依赖静态空间距离，面对高速非合作目标时，容易引发“冻结机器人综合征（Freezing Robot Problem）”，破坏运动的连续性。
+- **贡献 (Contributions)：**
+  1. 提出一种轻量级动态追踪前置节点（VoxelGrid + CV-EKF）。
+  2. 构建融合 TCPA（最近会遇时间）与 DCPA（最近会遇距离）的各向异性风险场。
+  3. **（关键话术）** 搭建高机动通用测试床，在算力受限的边缘设备上完成了 $O(M)$ 复杂度算法的极限工况验证。
+
+#### II. Related Work (相关工作) - *预计 0.5 页*
+
+- **局部避障的演进：** 从传统的 DWA 到现代的预测型导航。
+- **跨领域方法的启发：** 提及航空航天或自动驾驶领域的 TTC/TCPA 概念，引出将高阶运动学博弈引入机器人底层控制的必要性。
+
+#### III. Proposed Methodology (提出方法) - *预计 1.5 页 (★ 核心重头戏)*
+
+无论硬件怎么变，你的数学推导是无懈可击的。
+
+- **A. System Overview (系统概述)：** 放置包含 Point-LIO、地形分割、动态追踪与 TCPA-DWB 的全栈数据流向图。
+- **B. Lightweight Dynamic Obstacle Tracking (轻量级动态追踪)：** 详细描述如何为了保护边缘算力，使用体素降采样，并通过欧氏聚类与扩展卡尔曼滤波提取高置信度速度矢量。
+- **C. Anisotropic Spatiotemporal Risk Field (各向异性时空风险场)：** 这是得分点。展示如何将原本 $O(N \times M)$ 的计算降维至 $O(M)$。列出相对运动学公式，推导 TCPA 与 DCPA，并给出最终的二维高斯风险代价函数。
+
+#### IV. Experiments and Results (实验与结果) - *预计 1.5 页*
+
+- **A. Experimental Testbed Setup (实验测试床设置)：**
+  - **话术包装：** “为了验证所提算法在极端动态环境下的避障极限与实时性，本文采用搭载 NUC 边缘计算单元和 3D LiDAR 的高机动底盘作为硬件测试平台。” （在这里正常介绍你的硬件配置，证明实验的真实性）。
+- **B. Qualitative Analysis (定性分析)：** 贴出实车跑出来的轨迹对比图。重点对比原生 DWB 的“急刹抽搐”与你算法的“平滑连续规避”轨迹。
+- **C. Quantitative Analysis (定量分析)：** 利用表格对比成功率、平均通行速度、轨迹平滑度（如加速度变化率 Jolt）以及 CPU 占用率。
+
+#### V. Conclusion (结论) - *预计 0.25 页*
+
+- 总结 TCPA-DCPA 模型如何完美解决了传统算法的误刹车问题，并强调整套轻量级框架在各种需要连续平滑运动的复杂机器人平台上具有广泛的应用前景（强行扣回大创主题）。
+
+
+
+### 🎨 III. 绘制草案：图层与模块化布局 (Visual Layout)
 
 整张图建议采用**自左向右**或**自上而下**的流水线布局，分为三个核心大框（用带圆角的虚线框包围，并加上浅色背景区分）。
 
@@ -276,3 +315,4 @@ Secondly, to mitigate the computational burden on edge computing devices (e.g., 
 Finally, the tracking results are integrated into a customized **Dynamic Window Approach (DWB)** local planner. While a **Theta*** global planner provides a smooth, grid-independent reference path, the core contribution lies within the DWB's evaluation phase. We introduce a novel **Anisotropic Spatiotemporal Risk Field** based on the Time to Closest Point of Approach (TCPA) and the Distance at Closest Point of Approach (DCPA). This allows the omnidirectional chassis to proactively slide past moving obstacles with smooth velocity transitions rather than triggering freezing or abrupt stops.
 
 *(图注/Caption)* **Fig. 1.** Overall system architecture of the proposed predictive navigation framework, highlighting the VoxelGrid-optimized dynamic tracking pipeline and the TCPA-DCPA integrated DWB local planner.
+
