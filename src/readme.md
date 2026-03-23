@@ -64,3 +64,37 @@ $$Cost_{dynamic} = \alpha \cdot \exp \left( - \frac{t_{cpa}}{\tau_{safe}} \right
   /livox/lidar -> point_lio -> /cloud_registered -> terrain_analysis -> /segmentation/obstacle ->
   pointcloud_to_laserscan -> /scan -> Nav2
 
+
+
+#### 4.进展
+
+• 已经按阶段落地并验证了前两步。
+
+  PHASE 1 已创建并编译通过：
+  src/predictive_navigation_msgs/package.xml
+  src/predictive_navigation_msgs/CMakeLists.txt
+  src/predictive_navigation_msgs/msg/TrackedObstacle.msg
+  src/predictive_navigation_msgs/msg/TrackedObstacleArray.msg
+
+  PHASE 2 也已经继续完成并编译通过：
+  src/predictive_tracker/package.xml
+  src/predictive_tracker/CMakeLists.txt
+  src/predictive_tracker/src/dynamic_tracker_node.cpp
+
+  当前 tracker 实现了这些内容：
+
+  - 订阅 /terrain_map
+  - 用 pcl::EuclideanClusterExtraction 做 2D 聚类
+  - 最近邻 + 距离阈值做 ID 关联
+  - 常速度 Kalman Filter 估计 x, y, vx, vy
+  - 发布 /tracked_obstacles
+  - 发布 RViz MarkerArray
+
+  编译验证我实际跑过：
+
+  source /opt/ros/galactic/setup.bash
+  colcon build --packages-select predictive_navigation_msgs
+  colcon build --packages-select predictive_tracker --packages-up-to predictive_tracker
+
+  结果都成功。没有做运行时 ros topic/rviz 联调，只做了静态编译验证。
+
