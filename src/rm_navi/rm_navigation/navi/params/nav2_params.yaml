@@ -273,8 +273,8 @@ local_costmap:
         observation_sources: scan
         scan:
           topic: /scan
-          # 【统一】加入 sensor_frame 防止 TF 报错
-          sensor_frame: livox_frame
+          # /scan 由 pointcloud_to_laserscan 以 base_link 为目标坐标系发布
+          sensor_frame: base_link
           max_obstacle_height: 2.0
           clearing: True
           marking: True
@@ -312,8 +312,8 @@ global_costmap:
         observation_sources: scan
         scan:
           topic: /scan
-          # 【统一】加入 sensor_frame
-          sensor_frame: livox_frame
+          # /scan 由 pointcloud_to_laserscan 以 base_link 为目标坐标系发布
+          sensor_frame: base_link
           max_obstacle_height: 2.0
           clearing: True
           marking: True
