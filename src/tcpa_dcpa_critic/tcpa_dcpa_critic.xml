@@ -1,0 +1,7 @@
+<class_libraries>
+  <library path="tcpa_dcpa_critic">
+    <class type="tcpa_dcpa_critic::TCPADCPACritic" base_class_type="dwb_core::TrajectoryCritic">
+      <description>TCPA/DCPA-based dynamic obstacle risk critic for omnidirectional DWB trajectories.</description>
+    </class>
+  </library>
+</class_libraries>

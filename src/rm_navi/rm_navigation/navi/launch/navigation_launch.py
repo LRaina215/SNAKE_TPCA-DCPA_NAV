@@ -18,8 +18,8 @@ def generate_launch_description():
     autostart = LaunchConfiguration('autostart')
     params_file = LaunchConfiguration('params_file')
     
-    # 【核心修改】定义您的行为树绝对路径变量 NOTE: 无论如何这SB导航只会读nav2在/opt/ros~下行为树文件，所以这里只是给指路，最后替换行为树要去官方默认路径下替换官方行为树--/opt/ros/galactic/share/nav2_bt_navigator/behavior_trees/navigate_to_pose_w_replanning_and_recovery.xml       
-    my_bt_xml_path = '/home/robomaster/shaobing/src/rm_navi/rm_navigation/navi/params/navigate_to_pose_w_replanning_and_recovery.xml'
+    my_bt_xml_path = os.path.join(
+        bringup_dir, 'params', 'navigate_to_pose_w_replanning_and_recovery.xml')
 
     lifecycle_nodes = ['controller_server',
                        'planner_server',
@@ -75,9 +75,10 @@ def generate_launch_description():
         Node(
             package='nav2_controller',
             executable='controller_server',
+            name='controller_server',
             output='screen',
             parameters=[configured_params],
-            remappings=remappings
+            remappings=remappings),
 
         Node(
             package='nav2_planner',

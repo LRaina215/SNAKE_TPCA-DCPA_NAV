@@ -1,0 +1,15 @@
+predictive_tracker:
+  ros__parameters:
+    input_topic: "/segmentation/obstacle"
+    tracked_topic: "/tracked_obstacles"
+    marker_topic: "/tracked_obstacle_markers"
+    target_frame: "odom"
+    voxel_leaf_size: 0.1
+    cluster_tolerance: 0.35
+    min_cluster_size: 8
+    max_cluster_size: 5000
+    association_distance_threshold: 0.8
+    max_missed_frames: 5
+    process_noise_accel: 2.0
+    measurement_noise_position: 0.08
+    velocity_arrow_scale: 0.5

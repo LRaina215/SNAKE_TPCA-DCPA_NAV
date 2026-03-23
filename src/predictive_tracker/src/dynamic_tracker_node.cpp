@@ -12,8 +12,10 @@
 #include <Eigen/Dense>
 
 #include <geometry_msgs/msg/point.hpp>
+#include <geometry_msgs/msg/transform_stamped.hpp>
 #include <geometry_msgs/msg/vector3.hpp>
 #include <pcl/common/point_tests.h>
+#include <pcl/filters/voxel_grid.h>
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
 #include <pcl/search/kdtree.h>
@@ -23,6 +25,10 @@
 #include <predictive_navigation_msgs/msg/tracked_obstacle_array.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
+#include <tf2/exceptions.h>
+#include <tf2_ros/buffer.h>
+#include <tf2_ros/transform_listener.h>
+#include <tf2_sensor_msgs/tf2_sensor_msgs.h>
 #include <visualization_msgs/msg/marker.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
 
@@ -61,6 +67,7 @@ public:
     input_topic_ = declare_parameter<std::string>("input_topic", "/terrain_map");
     tracked_topic_ = declare_parameter<std::string>("tracked_topic", "/tracked_obstacles");
     marker_topic_ = declare_parameter<std::string>("marker_topic", "/tracked_obstacle_markers");
+    target_frame_ = declare_parameter<std::string>("target_frame", "odom");
     cluster_tolerance_ = declare_parameter<double>("cluster_tolerance", 0.35);
     min_cluster_size_ = declare_parameter<int>("min_cluster_size", 8);
     max_cluster_size_ = declare_parameter<int>("max_cluster_size", 5000);
@@ -68,8 +75,12 @@ public:
       declare_parameter<double>("association_distance_threshold", 0.8);
     max_missed_frames_ = declare_parameter<int>("max_missed_frames", 5);
     process_noise_accel_ = declare_parameter<double>("process_noise_accel", 2.0);
+    voxel_leaf_size_ = declare_parameter<double>("voxel_leaf_size", 0.1);
     measurement_noise_position_ = declare_parameter<double>("measurement_noise_position", 0.08);
     velocity_arrow_scale_ = declare_parameter<double>("velocity_arrow_scale", 0.5);
+
+    tf_buffer_ = std::make_shared<tf2_ros::Buffer>(get_clock());
+    tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
 
     cloud_sub_ = create_subscription<sensor_msgs::msg::PointCloud2>(
       input_topic_, rclcpp::SensorDataQoS(),
@@ -85,35 +96,52 @@ public:
 private:
   void pointCloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
   {
+    sensor_msgs::msg::PointCloud2 transformed_cloud_msg;
+    try {
+      const geometry_msgs::msg::TransformStamped transform_stamped =
+        tf_buffer_->lookupTransform(
+        target_frame_, msg->header.frame_id, msg->header.stamp, rclcpp::Duration::from_seconds(0.1));
+      tf2::doTransform(*msg, transformed_cloud_msg, transform_stamped);
+    } catch (const tf2::TransformException & ex) {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 2000,
+        "Failed to transform point cloud from %s to %s: %s",
+        msg->header.frame_id.c_str(), target_frame_.c_str(), ex.what());
+      return;
+    }
+
+    pcl::PointCloud<pcl::PointXYZ>::Ptr raw_cloud(new pcl::PointCloud<pcl::PointXYZ>());
+    pcl::fromROSMsg(transformed_cloud_msg, *raw_cloud);
+
     pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_xyz(new pcl::PointCloud<pcl::PointXYZ>());
-    pcl::fromROSMsg(*msg, *cloud_xyz);
+    pcl::VoxelGrid<pcl::PointXYZ> voxel_filter;
+    voxel_filter.setInputCloud(raw_cloud);
+    voxel_filter.setLeafSize(
+      static_cast<float>(voxel_leaf_size_),
+      static_cast<float>(voxel_leaf_size_),
+      static_cast<float>(voxel_leaf_size_));
+    voxel_filter.filter(*cloud_xyz);
 
     pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_flat(new pcl::PointCloud<pcl::PointXYZ>());
     cloud_flat->reserve(cloud_xyz->size());
 
-    std::vector<int> original_indices;
-    original_indices.reserve(cloud_xyz->size());
-
-    for (std::size_t i = 0; i < cloud_xyz->points.size(); ++i) {
-      const auto & point = cloud_xyz->points[i];
+    for (const auto & point : cloud_xyz->points) {
       if (!pcl::isFinite(point)) {
         continue;
       }
       pcl::PointXYZ flat_point = point;
       flat_point.z = 0.0f;
       cloud_flat->push_back(flat_point);
-      original_indices.push_back(static_cast<int>(i));
     }
 
-    std::vector<Detection> detections = extractDetections(cloud_xyz, cloud_flat, original_indices);
-    updateTracks(detections, rclcpp::Time(msg->header.stamp));
-    publishTrackedObstacles(msg->header);
+    std::vector<Detection> detections = extractDetections(cloud_xyz, cloud_flat);
+    updateTracks(detections, rclcpp::Time(transformed_cloud_msg.header.stamp));
+    publishTrackedObstacles(transformed_cloud_msg.header);
   }
 
   std::vector<Detection> extractDetections(
     const pcl::PointCloud<pcl::PointXYZ>::Ptr & cloud_xyz,
-    const pcl::PointCloud<pcl::PointXYZ>::Ptr & cloud_flat,
-    const std::vector<int> & original_indices) const
+    const pcl::PointCloud<pcl::PointXYZ>::Ptr & cloud_flat) const
   {
     std::vector<Detection> detections;
     if (cloud_flat->empty()) {
@@ -141,8 +169,7 @@ private:
       Eigen::Vector2d centroid_xy = Eigen::Vector2d::Zero();
       double mean_z = 0.0;
       for (const int index : cluster.indices) {
-        const auto original_index = static_cast<std::size_t>(original_indices[static_cast<std::size_t>(index)]);
-        const auto & original = cloud_xyz->points[original_index];
+        const auto & original = cloud_xyz->points[static_cast<std::size_t>(index)];
         centroid_xy.x() += original.x;
         centroid_xy.y() += original.y;
         mean_z += original.z;
@@ -454,17 +481,21 @@ private:
   std::string input_topic_;
   std::string tracked_topic_;
   std::string marker_topic_;
+  std::string target_frame_;
   double cluster_tolerance_{0.35};
   int min_cluster_size_{8};
   int max_cluster_size_{5000};
   double association_distance_threshold_{0.8};
   int max_missed_frames_{5};
   double process_noise_accel_{2.0};
+  double voxel_leaf_size_{0.1};
   double measurement_noise_position_{0.08};
   double velocity_arrow_scale_{0.5};
   int next_track_id_{0};
 
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr cloud_sub_;
+  std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
+  std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
   rclcpp::Publisher<predictive_navigation_msgs::msg::TrackedObstacleArray>::SharedPtr tracked_pub_;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr marker_pub_;
   std::unordered_map<int, Track> tracks_;

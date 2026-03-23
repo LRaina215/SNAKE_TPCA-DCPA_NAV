@@ -1,29 +1,24 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>predictive_tracker</name>
+  <name>tcpa_dcpa_critic</name>
   <version>0.0.1</version>
-  <description>Dynamic obstacle tracker node for predictive navigation.</description>
+  <description>DWB critic plugin implementing TCPA/DCPA dynamic obstacle risk scoring.</description>
   <maintainer email="lraina@example.com">lraina</maintainer>
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
-  <depend>rclcpp</depend>
-  <depend>sensor_msgs</depend>
+  <depend>dwb_core</depend>
+  <depend>dwb_msgs</depend>
   <depend>geometry_msgs</depend>
-  <depend>visualization_msgs</depend>
-  <depend>std_msgs</depend>
-  <depend>tf2</depend>
-  <depend>tf2_ros</depend>
-  <depend>tf2_sensor_msgs</depend>
-  <depend>pcl</depend>
-  <depend>pcl_conversions</depend>
-  <depend>eigen</depend>
+  <depend>nav2_costmap_2d</depend>
+  <depend>nav2_util</depend>
+  <depend>nav_2d_msgs</depend>
+  <depend>pluginlib</depend>
   <depend>predictive_navigation_msgs</depend>
-
-  <exec_depend>launch</exec_depend>
-  <exec_depend>launch_ros</exec_depend>
+  <depend>rclcpp</depend>
+  <depend>std_msgs</depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

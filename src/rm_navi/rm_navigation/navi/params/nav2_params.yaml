@@ -158,7 +158,7 @@ controller_server:
       stateful: True
       # critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "GoalAlign", "PathAlign", "PathDist", "GoalDist"]
       # 【修改后】删掉 "RotateToGoal"
-      critics: ["Oscillation", "BaseObstacle", "GoalAlign", "PathAlign", "PathDist", "GoalDist"]
+      critics: ["Oscillation", "BaseObstacle", "GoalAlign", "PathAlign", "PathDist", "GoalDist", "TCPADCPA"]
       # BaseObstacle.scale: 0.02
       # 【新增】加大对障碍物的恐惧 (BaseObstacle)
       # 如果它老是往障碍物堆里扎，说明它对碰撞的惩罚不够重视
@@ -170,6 +170,11 @@ controller_server:
       GoalAlign.forward_point_distance: 0.1
       PathDist.scale: 5.0
       GoalDist.scale: 50.0
+      TCPADCPA.plugin: "tcpa_dcpa_critic::TCPADCPACritic"
+      TCPADCPA.scale: 10.0
+      TCPADCPA.tau_safe: 2.0
+      TCPADCPA.sigma_safe: 0.5
+      TCPADCPA.tracked_topic: "/tracked_obstacles"
       RotateToGoal.scale: 0.0
       RotateToGoal.slowing_factor: 5.0
       RotateToGoal.lookahead_time: -1.0
