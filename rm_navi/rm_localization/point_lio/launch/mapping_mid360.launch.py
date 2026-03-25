@@ -7,6 +7,10 @@ from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
+    use_sim_time_arg = DeclareLaunchArgument(
+        'use_sim_time', default_value='false',
+        description='Use simulation (Gazebo) clock if true.')
+
     # Declare the RViz argument
     rviz_arg = DeclareLaunchArgument(
         'rviz', default_value='true',
@@ -22,6 +26,7 @@ def generate_launch_description():
         executable='lidar_filter',
         name='lidar_filter_node',
         output='screen',
+        parameters=[{'use_sim_time': LaunchConfiguration('use_sim_time')}],
         condition=IfCondition(LaunchConfiguration('enable_lidar_filter'))
     )
 
@@ -33,6 +38,7 @@ def generate_launch_description():
         ]),
         {
             'use_imu_as_input': False,  # Change to True to use IMU as input of Point-LIO
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
             'prop_at_freq_of_imu': True,
             'check_satu': True,
             'init_map_size': 10,
@@ -64,12 +70,14 @@ def generate_launch_description():
             FindPackageShare('point_lio'),
             'rviz_cfg', 'loam_livox.rviz'
         ])],
+        parameters=[{'use_sim_time': LaunchConfiguration('use_sim_time')}],
         condition=IfCondition(LaunchConfiguration('rviz')),
         prefix='nice'
     )
 
     # Assemble the launch description
     ld = LaunchDescription([
+        use_sim_time_arg,
         rviz_arg,
         enable_lidar_filter_arg,
         filter_node,

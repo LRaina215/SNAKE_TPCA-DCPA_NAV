@@ -3,6 +3,8 @@ import sys
 import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch.substitutions import Command
+from launch.actions import DeclareLaunchArgument
+from launch.substitutions import LaunchConfiguration
 sys.path.append(os.path.join(get_package_share_directory('icp_registration'), 'launch'))
 
 def generate_launch_description():
@@ -10,12 +12,20 @@ def generate_launch_description():
   from launch import LaunchDescription
   
   params = os.path.join(get_package_share_directory('icp_registration'), 'config', 'icp.yaml')
+  use_sim_time = LaunchConfiguration('use_sim_time')
   node = Node(
     package='icp_registration',
     executable='icp_registration_node',
     output='screen',
-    parameters=[params]
+    parameters=[params, {'use_sim_time': use_sim_time}]
   )
   
-  return LaunchDescription([node])
+  return LaunchDescription([
+    DeclareLaunchArgument(
+      'use_sim_time',
+      default_value='false',
+      description='Use simulation (Gazebo) clock if true'
+    ),
+    node
+  ])
     

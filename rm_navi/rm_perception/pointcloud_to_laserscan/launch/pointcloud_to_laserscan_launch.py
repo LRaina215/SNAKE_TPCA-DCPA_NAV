@@ -7,6 +7,10 @@ from launch_ros.actions import Node
 def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument(
+            name='use_sim_time', default_value='false',
+            description='Use simulation (Gazebo) clock if true'
+        ),
+        DeclareLaunchArgument(
             name='scanner', default_value='scanner',
             description='Namespace for sample topics'
         ),
@@ -17,6 +21,7 @@ def generate_launch_description():
             # remappings=[('cloud_in',  ['/livox/lidar_no_body']),
             #             ('scan',  ['/scan'])],
             parameters=[{
+                'use_sim_time': LaunchConfiguration('use_sim_time'),
                 'target_frame': 'base_link', # base_link
                 'transform_tolerance': 0.1,
                 'min_height': 0.15,

@@ -7,8 +7,14 @@ from launch_ros.substitutions import FindPackageShare
 
 def generate_launch_description():
     params_file = LaunchConfiguration('params_file')
+    use_sim_time = LaunchConfiguration('use_sim_time')
 
     return LaunchDescription([
+        DeclareLaunchArgument(
+            'use_sim_time',
+            default_value='false',
+            description='Use simulation (Gazebo) clock if true.'
+        ),
         DeclareLaunchArgument(
             'params_file',
             default_value=PathJoinSubstitution([
@@ -23,6 +29,6 @@ def generate_launch_description():
             executable='dynamic_tracker_node',
             name='predictive_tracker',
             output='screen',
-            parameters=[params_file]
+            parameters=[params_file, {'use_sim_time': use_sim_time}]
         )
     ])

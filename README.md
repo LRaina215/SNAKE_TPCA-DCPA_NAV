@@ -223,6 +223,66 @@ Nav2 接入
   rm_localization/pcd2pgm，我没有碰。
 
 
+tcpa_sim_env 已经落地并跑通，关键文件在这里：
+
+robot.xacro
+dynamic_test.world
+sim_launch.py
+pointcloud_relay.py
+package.xml
+CMakeLists.txt
+我还补了 livox_ros_driver2/package.xml，因为你工作区里的 livox_ros_driver2 原本只有 package_ROS2.xml，这会直接卡住 ament/rosidl 构建。
+
+现在默认 livox_plugin 模式下的接口已经收敛成：
+
+/livox/imu -> sensor_msgs/msg/Imu
+/livox/lidar -> sensor_msgs/msg/PointCloud2
+/odom -> nav_msgs/msg/Odometry
+为了兼容你指定的 Livox 插件，我把插件原始输出改成内部话题 /livox/lidar_custom，然后用一个很轻量的 relay 把 /livox/lidar_custom_PointCloud2 转发到最终的 /livox/lidar。这样既保留了插件原生 CustomMsg，又保证你现有 Point-LIO 能直接吃 /livox/lidar 的 PointCloud2。
+
+我实际验证过这些点：
+
+livox_ros_driver2、ros2_livox_simulation、tcpa_sim_env 都已构建通过
+sim_launch.py 和 relay 脚本都通过了 Python 语法检查
+headless 启动能成功 spawn 机器人，Livox 插件成功加载 mid360.csv
+运行中的 topic 列表里有：
+/livox/imu [sensor_msgs/msg/Imu]
+/livox/lidar [sensor_msgs/msg/PointCloud2]
+/livox/lidar_custom [livox_ros_driver2/msg/CustomMsg]
+/livox/lidar_custom_PointCloud2 [sensor_msgs/msg/PointCloud2]
+/odom [nav_msgs/msg/Odometry]
+/odom 实际消息里的协方差是 0.01 / 0.01 / 0.005
+
+运行顺序
+
+终端 1，启动 Gazebo 仿真：
+
+cd /home/robomaster/auto_shao
+source /opt/ros/galactic/setup.bash
+source install/setup.bash
+ros2 launch tcpa_sim_env sim_launch.py gui:=true
+终端 2，启动感知与动态障碍前处理链：
+
+cd /home/robomaster/auto_shao/src
+./sim_pre.sh
+终端 3，启动定位与导航链：
+
+cd /home/robomaster/auto_shao/src
+./sim_nav.sh
+终端 4，录 rosbag：
+
+cd /home/robomaster/auto_shao
+source /opt/ros/galactic/setup.bash
+source install/setup.bash
+mkdir -p bags
+ros2 bag record /odom /cmd_vel /tracked_obstacles -o bags/tcpa_run_$(date +%Y%m%d_%H%M%S)
+这次我还实际确认了默认仿真接口已经在线：
+
+/livox/lidar -> sensor_msgs/msg/PointCloud2
+/livox/imu -> sensor_msgs/msg/Imu
+/odom -> nav_msgs/msg/Odometry
+并且 /odom 协方差里已经是你要求的 0.01 / 0.01 / 0.005。
+
 
 ## 论文具体
 
