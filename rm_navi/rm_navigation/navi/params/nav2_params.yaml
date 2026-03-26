@@ -58,8 +58,6 @@ bt_navigator:
     enable_groot_monitoring: True
     groot_zmq_publisher_port: 1666
     groot_zmq_server_port: 1667
-    # 【关键修改】使用绝对路径
-    default_bt_xml_filename: "/home/lraina/shaobing/src/rm_navi/rm_navigation/navi/params/navigate_to_pose_w_replanning_and_recovery.xml"
     plugin_lib_names:
     - nav2_compute_path_to_pose_action_bt_node
     - nav2_compute_path_through_poses_action_bt_node
@@ -92,7 +90,6 @@ bt_navigator:
     - nav2_planner_selector_bt_node
     - nav2_controller_selector_bt_node
     - nav2_goal_checker_selector_bt_node
-    - smart_escape_nodes #
 
 bt_navigator_rclcpp_node:
   ros__parameters:

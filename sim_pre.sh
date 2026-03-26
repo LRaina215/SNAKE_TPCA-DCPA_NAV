@@ -3,9 +3,9 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SETUP_FILE="${SCRIPT_DIR}/../install/setup.bash"
+WORKSPACE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+SETUP_FILE="${WORKSPACE_DIR}/install/setup.bash"
 
-# [新增这行] 将当前脚本的 Linux 路径转换为 Windows 路径，赋给 WIN_PWD
 WIN_PWD=$(wslpath -w "$SCRIPT_DIR")
 
 if [[ ! -f "${SETUP_FILE}" ]]; then
@@ -13,16 +13,43 @@ if [[ ! -f "${SETUP_FILE}" ]]; then
   exit 1
 fi
 
-cmds=(
-  "ros2 launch point_lio mapping_mid360.launch.py use_sim_time:=True rviz:=false"
-  "ros2 launch terrain_analysis terrain_analysis.launch use_sim_time:=True"
-  "ros2 launch predictive_tracker dynamic_tracker.launch.py use_sim_time:=True"
-  "ros2 launch pointcloud_to_laserscan pointcloud_to_laserscan_launch.py use_sim_time:=True"
+set +u
+source "${SETUP_FILE}"
+set -u
+export RCUTILS_LOGGING_BUFFERED_STREAM=1
+
+tabs=(
+  "Sim|ros2 launch tcpa_sim_env sim_launch.py"
+  "Point-LIO|ros2 launch point_lio mapping_mid360.launch.py use_sim_time:=True rviz:=false"
+  "Terrain|ros2 launch terrain_analysis terrain_analysis.launch use_sim_time:=True"
+  "Tracker|ros2 launch predictive_tracker dynamic_tracker.launch.py use_sim_time:=True"
+  "Scan|ros2 launch pointcloud_to_laserscan pointcloud_to_laserscan_launch.py use_sim_time:=True target_frame:=base_link"
 )
 
-for cmd in "${cmds[@]}"; do
-  echo "Current CMD : ${cmd}"
-  # gnome-terminal -- bash -lc "cd '${SCRIPT_DIR}'; source '${SETUP_FILE}'; ${cmd}; exec bash;"
-  wt.exe -w 0 nt -d "$WIN_PWD" wsl.exe -d Ubuntu-20.04 -- bash -c "source ../install/setup.bash && $cmd \\; exec bash"
-  sleep 0.3
+wt_args=(-w 0)
+
+for i in "${!tabs[@]}"; do
+  title="${tabs[$i]%%|*}"
+  cmd="${tabs[$i]#*|}"
+
+  echo "Launching [${title}] ${cmd}"
+
+  if [[ "$i" -gt 0 ]]; then
+    wt_args+=(\;)
+  fi
+
+  wt_args+=(
+    nt
+    --title "$title"
+    -d "$WIN_PWD"
+    wsl.exe -d Ubuntu-20.04 -- bash -c
+    "source ../install/setup.bash && export RCUTILS_LOGGING_BUFFERED_STREAM=1 && ${cmd} \\; exec bash"
+  )
 done
+
+wt.exe "${wt_args[@]}"
+
+echo "Opened all pre-simulation tabs. Suggested checks:"
+echo "  ros2 topic echo /clock --num 1"
+echo "  ros2 topic echo /cloud_registered --num 1"
+echo "  ros2 topic echo /segmentation/obstacle --num 1"

@@ -1,5 +1,6 @@
 predictive_tracker:
   ros__parameters:
+    use_sim_time: true
     input_topic: "/segmentation/obstacle"
     tracked_topic: "/tracked_obstacles"
     marker_topic: "/tracked_obstacle_markers"

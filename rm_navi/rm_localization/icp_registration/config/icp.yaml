@@ -1,9 +1,9 @@
 /icp_registration:
   ros__parameters:
-    use_sim_time: false 
+    use_sim_time: true
     rough_leaf_size: 0.4
     refine_leaf_size: 0.1
-    pcd_path: "/home/robomaster/shaobing/src/rm_navi/rm_localization/point_lio/PCD/scans.pcd"
+    pcd_path: "/home/robomaster/auto_shao/src/rm_navi/rm_localization/point_lio/PCD/scans.pcd"
     map_frame_id: "map"
     odom_frame_id: "odom"
     laser_frame_id: "livox_frame"

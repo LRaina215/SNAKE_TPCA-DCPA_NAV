@@ -16,6 +16,7 @@ def generate_launch_description():
   node = Node(
     package='icp_registration',
     executable='icp_registration_node',
+    name='icp_registration',
     output='screen',
     parameters=[params, {'use_sim_time': use_sim_time}]
   )
@@ -23,7 +24,7 @@ def generate_launch_description():
   return LaunchDescription([
     DeclareLaunchArgument(
       'use_sim_time',
-      default_value='false',
+      default_value='true',
       description='Use simulation (Gazebo) clock if true'
     ),
     node

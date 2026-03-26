@@ -71,6 +71,15 @@ def generate_launch_description():
         ),
         Node(
             package='tcpa_sim_env',
+            executable='obstacle_mover.py',
+            name='obstacle_mover',
+            output='screen',
+            parameters=[{
+                'use_sim_time': True,
+            }],
+        ),
+        Node(
+            package='tcpa_sim_env',
             executable='pointcloud_relay.py',
             name='livox_pointcloud_relay',
             output='screen',

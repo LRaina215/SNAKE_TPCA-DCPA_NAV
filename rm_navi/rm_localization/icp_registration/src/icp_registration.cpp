@@ -155,13 +155,15 @@ IcpNode::~IcpNode() {
 void IcpNode::pointcloudCallback(
     const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
   pcl::fromROSMsg(*msg, *cloud_in_);
-  if (first_scan_) {
+  if (first_scan_ || !is_ready_) {
     auto pose_msg =
         std::make_shared<geometry_msgs::msg::PoseWithCovarianceStamped>();
     pose_msg->header = msg->header;
     pose_msg->pose.pose = initial_pose_;
     initialPoseCallback(pose_msg);
-    first_scan_ = false;
+    if (is_ready_) {
+      first_scan_ = false;
+    }
   }
 }
 

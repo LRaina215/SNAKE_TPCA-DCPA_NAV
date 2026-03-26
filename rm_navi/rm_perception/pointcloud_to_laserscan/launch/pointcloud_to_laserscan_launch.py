@@ -7,8 +7,12 @@ from launch_ros.actions import Node
 def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument(
-            name='use_sim_time', default_value='false',
+            name='use_sim_time', default_value='true',
             description='Use simulation (Gazebo) clock if true'
+        ),
+        DeclareLaunchArgument(
+            name='target_frame', default_value='base_link',
+            description='Frame to project the point cloud into before creating /scan'
         ),
         DeclareLaunchArgument(
             name='scanner', default_value='scanner',
@@ -22,10 +26,10 @@ def generate_launch_description():
             #             ('scan',  ['/scan'])],
             parameters=[{
                 'use_sim_time': LaunchConfiguration('use_sim_time'),
-                'target_frame': 'base_link', # base_link
-                'transform_tolerance': 0.1,
-                'min_height': 0.15,
-                'max_height': 0.3,
+                'target_frame': LaunchConfiguration('target_frame'),
+                'transform_tolerance': 0.2,
+                'min_height': 0.05,
+                'max_height': 1.0,
                 'angle_min': -3.14159,  # -M_PI/2 PHASE1
                 'angle_max': 3.14159,  # M_PI/2 
                 'angle_increment': 0.0043,  # M_PI/360.0 

@@ -11,6 +11,7 @@ install(DIRECTORY
 )
 
 install(PROGRAMS
+  scripts/obstacle_mover.py
   scripts/pointcloud_relay.py
   DESTINATION lib/${PROJECT_NAME}
 )

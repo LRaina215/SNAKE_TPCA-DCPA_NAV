@@ -17,9 +17,6 @@ def generate_launch_description():
     use_sim_time = LaunchConfiguration('use_sim_time')
     autostart = LaunchConfiguration('autostart')
     params_file = LaunchConfiguration('params_file')
-    
-    my_bt_xml_path = os.path.join(
-        bringup_dir, 'params', 'navigate_to_pose_w_replanning_and_recovery.xml')
 
     lifecycle_nodes = ['controller_server',
                        'planner_server',
@@ -33,8 +30,6 @@ def generate_launch_description():
     # Create our own temporary YAML files that include substitutions
     param_substitutions = {
         'use_sim_time': use_sim_time,
-        # 强制将 YAML 中的参数替换为我们的路径
-        'default_bt_xml_filename': my_bt_xml_path,
         'autostart': autostart}
 
     configured_params = RewrittenYaml(
@@ -62,11 +57,6 @@ def generate_launch_description():
             'params_file',
             default_value=os.path.join(bringup_dir, 'params', 'nav2_params.yaml'),
             description='Full path to the ROS2 parameters file to use'),
-
-        DeclareLaunchArgument(
-            'default_bt_xml_filename',
-            default_value=my_bt_xml_path,
-            description='Full path to the behavior tree xml file to use'),
 
         DeclareLaunchArgument(
             'map_subscribe_transient_local', default_value='false',
@@ -110,8 +100,7 @@ def generate_launch_description():
             executable='bt_navigator',
             name='bt_navigator',
             output='screen',
-            # 【核心修改】强制注入参数字典，双重保险
-            parameters=[configured_params, {'default_bt_xml_filename': my_bt_xml_path}],
+            parameters=[configured_params],
             remappings=remappings),
 
         Node(

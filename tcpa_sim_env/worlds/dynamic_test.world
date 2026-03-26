@@ -204,32 +204,36 @@
       </link>
     </model>
 
-    <actor name="crossing_actor">
-      <pose>-1.0 -3.0 0.55 0 0 0</pose>
-      <link name="body_link">
+    <model name="obs1">
+      <pose>-1.0 -3.0 0.75 0 0 0</pose>
+      <link name="obs1_link">
+        <gravity>false</gravity>
+        <self_collide>false</self_collide>
         <inertial>
-          <mass>8.0</mass>
+          <mass>12.0</mass>
           <inertia>
-            <ixx>0.2</ixx>
+            <ixx>2.52</ixx>
             <ixy>0.0</ixy>
             <ixz>0.0</ixz>
-            <iyy>0.2</iyy>
+            <iyy>2.52</iyy>
             <iyz>0.0</iyz>
-            <izz>0.1</izz>
+            <izz>0.54</izz>
           </inertia>
         </inertial>
         <collision name="collision">
           <geometry>
-            <box>
-              <size>0.5 0.5 1.1</size>
-            </box>
+            <cylinder>
+              <radius>0.3</radius>
+              <length>1.5</length>
+            </cylinder>
           </geometry>
         </collision>
         <visual name="visual">
           <geometry>
-            <box>
-              <size>0.5 0.5 1.1</size>
-            </box>
+            <cylinder>
+              <radius>0.3</radius>
+              <length>1.5</length>
+            </cylinder>
           </geometry>
           <material>
             <ambient>0.88 0.20 0.20 1.0</ambient>
@@ -237,53 +241,50 @@
           </material>
         </visual>
       </link>
-      <script>
-        <loop>true</loop>
-        <auto_start>true</auto_start>
-        <trajectory id="0" type="crossing">
-          <waypoint>
-            <time>0.0</time>
-            <pose>-1.0 -3.0 0.55 0 0 0</pose>
-          </waypoint>
-          <waypoint>
-            <time>5.0</time>
-            <pose>-1.0 3.0 0.55 0 0 0</pose>
-          </waypoint>
-          <waypoint>
-            <time>10.0</time>
-            <pose>-1.0 -3.0 0.55 0 0 0</pose>
-          </waypoint>
-        </trajectory>
-      </script>
-    </actor>
+      <plugin name="obs1_planar_move" filename="libgazebo_ros_planar_move.so">
+        <ros>
+          <namespace>/obs1</namespace>
+          <remapping>cmd_vel:=cmd_vel</remapping>
+          <remapping>odom:=odom</remapping>
+        </ros>
+        <update_rate>100</update_rate>
+        <publish_rate>30</publish_rate>
+        <publish_odom>false</publish_odom>
+        <publish_odom_tf>false</publish_odom_tf>
+        <odometry_frame>obs1_odom</odometry_frame>
+        <robot_base_frame>obs1_link</robot_base_frame>
+      </plugin>
+    </model>
 
-    <actor name="headon_actor">
-      <pose>4.0 0.0 0.55 0 0 0</pose>
-      <link name="body_link">
+    <model name="obs2">
+      <pose>4.0 0.0 0.75 0 0 0</pose>
+      <link name="obs2_link">
+        <gravity>false</gravity>
+        <self_collide>false</self_collide>
         <inertial>
-          <mass>8.0</mass>
+          <mass>12.0</mass>
           <inertia>
-            <ixx>0.2</ixx>
+            <ixx>2.52</ixx>
             <ixy>0.0</ixy>
             <ixz>0.0</ixz>
-            <iyy>0.2</iyy>
+            <iyy>2.52</iyy>
             <iyz>0.0</iyz>
-            <izz>0.1</izz>
+            <izz>0.54</izz>
           </inertia>
         </inertial>
         <collision name="collision">
           <geometry>
             <cylinder>
-              <radius>0.28</radius>
-              <length>1.1</length>
+              <radius>0.3</radius>
+              <length>1.5</length>
             </cylinder>
           </geometry>
         </collision>
         <visual name="visual">
           <geometry>
             <cylinder>
-              <radius>0.28</radius>
-              <length>1.1</length>
+              <radius>0.3</radius>
+              <length>1.5</length>
             </cylinder>
           </geometry>
           <material>
@@ -292,24 +293,19 @@
           </material>
         </visual>
       </link>
-      <script>
-        <loop>true</loop>
-        <auto_start>true</auto_start>
-        <trajectory id="0" type="head_on">
-          <waypoint>
-            <time>0.0</time>
-            <pose>4.0 0.0 0.55 0 0 0</pose>
-          </waypoint>
-          <waypoint>
-            <time>8.0</time>
-            <pose>-4.0 0.0 0.55 0 0 0</pose>
-          </waypoint>
-          <waypoint>
-            <time>16.0</time>
-            <pose>4.0 0.0 0.55 0 0 0</pose>
-          </waypoint>
-        </trajectory>
-      </script>
-    </actor>
+      <plugin name="obs2_planar_move" filename="libgazebo_ros_planar_move.so">
+        <ros>
+          <namespace>/obs2</namespace>
+          <remapping>cmd_vel:=cmd_vel</remapping>
+          <remapping>odom:=odom</remapping>
+        </ros>
+        <update_rate>100</update_rate>
+        <publish_rate>30</publish_rate>
+        <publish_odom>false</publish_odom>
+        <publish_odom_tf>false</publish_odom_tf>
+        <odometry_frame>obs2_odom</odometry_frame>
+        <robot_base_frame>obs2_link</robot_base_frame>
+      </plugin>
+    </model>
   </world>
 </sdf>

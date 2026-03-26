@@ -728,12 +728,17 @@ int main(int argc, char **argv) {
     rclcpp::Subscription<livox_ros_driver2::msg::CustomMsg>::SharedPtr sub_pcl_livox_;
     
     if (p_pre->lidar_type == AVIA){
-        sub_pcl_livox_ = nh->create_subscription<livox_ros_driver2::msg::CustomMsg>(lid_topic, 20, livox_pcl_cbk);
+        auto livox_qos = rclcpp::SensorDataQoS();
+        livox_qos.keep_last(20);
+        sub_pcl_livox_ = nh->create_subscription<livox_ros_driver2::msg::CustomMsg>(
+            lid_topic, livox_qos, livox_pcl_cbk);
     } else {
         sub_pcl_pc_ = nh->create_subscription<sensor_msgs::msg::PointCloud2>(lid_topic, rclcpp::SensorDataQoS(),
                                                                              standard_pcl_cbk);
     }
-    auto sub_imu = nh->create_subscription<sensor_msgs::msg::Imu>(imu_topic, 200, imu_cbk);
+    auto imu_qos = rclcpp::SensorDataQoS();
+    imu_qos.keep_last(200);
+    auto sub_imu = nh->create_subscription<sensor_msgs::msg::Imu>(imu_topic, imu_qos, imu_cbk);
     auto pubLaserCloudFullRes = nh->create_publisher<sensor_msgs::msg::PointCloud2>
             ("cloud_registered", 100);
     auto pubLaserCloudFullRes_body = nh->create_publisher<sensor_msgs::msg::PointCloud2>

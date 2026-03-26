@@ -8,7 +8,7 @@ from launch_ros.substitutions import FindPackageShare
 
 def generate_launch_description():
     use_sim_time_arg = DeclareLaunchArgument(
-        'use_sim_time', default_value='false',
+        'use_sim_time', default_value='true',
         description='Use simulation (Gazebo) clock if true.')
 
     # Declare the RViz argument
@@ -38,7 +38,8 @@ def generate_launch_description():
         ]),
         {
             'use_imu_as_input': False,  # Change to True to use IMU as input of Point-LIO
-            'use_sim_time': LaunchConfiguration('use_sim_time'),
+            # 仿真专用：强制 laserMapping 跟随 Gazebo /clock。
+            'use_sim_time': True,
             'prop_at_freq_of_imu': True,
             'check_satu': True,
             'init_map_size': 10,

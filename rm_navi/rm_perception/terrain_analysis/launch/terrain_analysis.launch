@@ -1,5 +1,5 @@
 <launch>
-  <arg name="use_sim_time" default="false"/>
+  <arg name="use_sim_time" default="true"/>
   <node pkg="terrain_analysis" exec="terrainAnalysis" name="terrainAnalysis" output="screen">
     <remap from="/registered_scan" to="/cloud_registered"/>
     <remap from="/state_estimation" to="/odom"/>
