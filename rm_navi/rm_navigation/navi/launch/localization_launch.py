@@ -66,7 +66,7 @@ def generate_launch_description():
 
         DeclareLaunchArgument(
             'map',
-            default_value=os.path.join(bringup_dir, 'maps', 'ul26.yaml'),
+            default_value=os.path.join(bringup_dir, 'maps', 'arena_map.yaml'),
             description='Full path to map yaml file to load'),
 
         DeclareLaunchArgument(

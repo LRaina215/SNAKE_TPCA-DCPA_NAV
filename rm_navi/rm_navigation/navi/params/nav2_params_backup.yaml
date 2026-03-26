@@ -110,6 +110,7 @@ controller_server:
     # DWB parameters
     FollowPath:
       plugin: "dwb_core::DWBLocalPlanner"
+      default_critic_namespaces: ["dwb_critics", "tcpa_dcpa_critic"]
       debug_trajectory_details: True
       min_vel_x: -0.6 # 0.5* 0.8! 
       min_vel_y: -0.6
@@ -138,7 +139,7 @@ controller_server:
       trans_stopped_velocity: 0.25
       short_circuit_trajectory_evaluation: True
       stateful: True
-      critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "GoalAlign", "PathAlign", "PathDist", "GoalDist"]
+      critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "GoalAlign", "PathAlign", "PathDist", "GoalDist", "TCPADCPA"]
       BaseObstacle.scale: 0.20 #0.02
       PathAlign.scale: 32.0
       PathAlign.forward_point_distance: 0.1
@@ -146,6 +147,11 @@ controller_server:
       GoalAlign.forward_point_distance: 0.1
       PathDist.scale: 32.0
       GoalDist.scale: 24.0
+      TCPADCPA.plugin: "tcpa_dcpa_critic::TCPADCPACritic"
+      TCPADCPA.scale: 10.0
+      TCPADCPA.tau_safe: 2.0
+      TCPADCPA.sigma_safe: 0.5
+      TCPADCPA.tracked_topic: "/tracked_obstacles"
       RotateToGoal.scale: 32.0
       RotateToGoal.slowing_factor: 5.0
       RotateToGoal.lookahead_time: -1.0
