@@ -14,16 +14,9 @@ def generate_launch_description():
             executable='ground_segmentation_node',
             output='screen',
             parameters=[params_file],
-            # 【修改】添加 remappings
-            # 虽然我们在 yaml 里改了 input_topic，但有些版本的代码只认 remapping
-            # 这样写是双保险：
             remappings=[
-                # 告诉节点：凡是你要订阅 "cloud_in" 或 "input_topic" 的地方，
-                # 都给我去订阅 "/livox/lidar_no_body"
-                ('cloud_in', '/livox/lidar_no_body'),
-                ('input_topic', '/livox/lidar_no_body'),
-                
-                # 输出重映射 (可选，保持和 yaml 一致即可)
+                ('cloud_in', '/cloud_registered'),
+                ('input_topic', '/cloud_registered'),
                 ('obstacles', '/segmentation/obstacle'),
                 ('ground', '/segmentation/ground')
             ]

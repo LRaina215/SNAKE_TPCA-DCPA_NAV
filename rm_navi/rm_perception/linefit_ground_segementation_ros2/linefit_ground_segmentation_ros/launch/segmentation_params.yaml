@@ -9,7 +9,7 @@ ground_segmentation:
 
     max_dist_to_line: 0.05      # maximum vertical distance of point to line to be considered ground.
 
-    sensor_height: 0.35        # sensor height above ground.
+    sensor_height: 0.2         # 仿真中雷达高度约 0.2m
     min_slope: 0.0              # minimum slope of a ground line.
     max_slope: 0.35              # maximum slope of a ground line.
     max_fit_error: 0.075         # maximum error of a point during line fit.
@@ -23,6 +23,6 @@ ground_segmentation:
     latch: false                # latch output topics or not
     visualize: false            # visualize segmentation result - USE ONLY FOR DEBUGGING
 
-    input_topic: "livox/lidar_no_body" # 新增过滤器
-    obstacle_output_topic: "segmentation/obstacle"
-    ground_output_topic: "segmentation/ground"
+    input_topic: "/cloud_registered"
+    obstacle_output_topic: "/segmentation/obstacle"
+    ground_output_topic: "/segmentation/ground"

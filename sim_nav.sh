@@ -28,7 +28,7 @@ tabs=(
   "Localization|ros2 launch navi localization_launch.py use_sim_time:=True map:=${MAP_FILE}"
   "MapTF|ros2 run tf2_ros static_transform_publisher 0 0 0 0 0 0 map odom"
   "ICP|ros2 launch icp_registration icp.launch.py use_sim_time:=True"
-  "Nav2|ros2 launch navi navigation_launch.py use_sim_time:=True"
+  "Nav2|ros2 launch nav2_bringup navigation_launch.py use_sim_time:=True params_file:=${SCRIPT_DIR}/rm_navi/rm_navigation/navi/params/nav2_params.yaml"
 )
 
 wt_args=(-w 0)
