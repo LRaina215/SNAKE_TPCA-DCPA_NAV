@@ -137,6 +137,41 @@ void pointBodyLidarToIMU(PointType const *const pi, PointType *const po) {
 
 int points_cache_size = 0;
 
+double clamp_timestamp_if_needed(const char * source_name, double timestamp) {
+    if (timestamp_regression_tolerance <= 0.0) {
+        return timestamp;
+    }
+
+    double *last_timestamp = nullptr;
+    if (strcmp(source_name, "lidar") == 0) {
+        last_timestamp = &last_timestamp_lidar;
+    } else if (strcmp(source_name, "imu") == 0) {
+        last_timestamp = &last_timestamp_imu;
+    }
+
+    if (last_timestamp == nullptr || *last_timestamp < 0.0) {
+        return timestamp;
+    }
+
+    const double delta = *last_timestamp - timestamp;
+    if (delta <= 0.0) {
+        return timestamp;
+    }
+
+    if (delta <= timestamp_regression_tolerance) {
+        const double adjusted = *last_timestamp + 1e-6;
+        RCLCPP_WARN(
+            logger,
+            "%s timestamp regressed by %.6fs within tolerance %.6fs, clamping forward.",
+            source_name,
+            delta,
+            timestamp_regression_tolerance);
+        return adjusted;
+    }
+
+    return timestamp;
+}
+
 void points_cache_collect() // seems for debug
 {
     PointVector points_history;
@@ -202,7 +237,10 @@ void standard_pcl_cbk(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
     mtx_buffer.lock();
     scan_count++;
     double preprocess_start_time = omp_get_wtime();
-    if (get_time_sec(msg->header.stamp) < last_timestamp_lidar) {
+    double lidar_timestamp = get_time_sec(msg->header.stamp);
+    lidar_timestamp = clamp_timestamp_if_needed("lidar", lidar_timestamp);
+    msg->header.stamp = get_ros_time(lidar_timestamp);
+    if (lidar_timestamp < last_timestamp_lidar) {
         RCLCPP_ERROR(logger, "lidar loop back, clear buffer");
         // lidar_buffer.shrink_to_fit();
 
@@ -211,7 +249,7 @@ void standard_pcl_cbk(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
         return;
     }
 
-    last_timestamp_lidar = msg->header.stamp.sec;
+    last_timestamp_lidar = lidar_timestamp;
 
     PointCloudXYZI::Ptr ptr(new PointCloudXYZI());
     PointCloudXYZI::Ptr ptr_div(new PointCloudXYZI());
@@ -271,7 +309,10 @@ void livox_pcl_cbk(const livox_ros_driver2::msg::CustomMsg::SharedPtr msg) {
     mtx_buffer.lock();
     double preprocess_start_time = omp_get_wtime();
     scan_count++;
-    if (get_time_sec(msg->header.stamp) < last_timestamp_lidar) {
+    double lidar_timestamp = get_time_sec(msg->header.stamp);
+    lidar_timestamp = clamp_timestamp_if_needed("lidar", lidar_timestamp);
+    msg->header.stamp = get_ros_time(lidar_timestamp);
+    if (lidar_timestamp < last_timestamp_lidar) {
         RCLCPP_ERROR(logger, "lidar loop back, clear buffer");
 
         mtx_buffer.unlock();
@@ -279,7 +320,7 @@ void livox_pcl_cbk(const livox_ros_driver2::msg::CustomMsg::SharedPtr msg) {
         return;
     }
 
-    last_timestamp_lidar = get_time_sec(msg->header.stamp);
+    last_timestamp_lidar = lidar_timestamp;
 
     PointCloudXYZI::Ptr ptr(new PointCloudXYZI());
     PointCloudXYZI::Ptr ptr_div(new PointCloudXYZI());
@@ -344,6 +385,8 @@ void imu_cbk(const sensor_msgs::msg::Imu::SharedPtr msg_in) {
     double timestamp = get_time_sec(msg->header.stamp);
 
     mtx_buffer.lock();
+    timestamp = clamp_timestamp_if_needed("imu", timestamp);
+    msg->header.stamp = get_ros_time(timestamp);
 
     if (timestamp < last_timestamp_imu) {
         RCLCPP_ERROR(logger, "imu loop back, clear deque");

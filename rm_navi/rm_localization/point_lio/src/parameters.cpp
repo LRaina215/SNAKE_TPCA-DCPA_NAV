@@ -28,6 +28,7 @@ bool runtime_pos_log, pcd_save_en, path_en, extrinsic_est_en = true;
 bool scan_pub_en, scan_body_pub_en;
 shared_ptr<Preprocess> p_pre;
 double time_lag_imu_to_lidar = 0.0;
+double timestamp_regression_tolerance = 0.0;
 
 void readParameters(shared_ptr<rclcpp::Node> &nh) {
     p_pre.reset(new Preprocess());
@@ -49,6 +50,7 @@ void readParameters(shared_ptr<rclcpp::Node> &nh) {
     nh->declare_parameter<bool>("common.cut_frame", false);
     nh->declare_parameter<double>("common.cut_frame_time_interval", 0.1);
     nh->declare_parameter<double>("common.time_lag_imu_to_lidar", 0.0);
+    nh->declare_parameter<double>("common.timestamp_regression_tolerance", 0.0);
     nh->declare_parameter<double>("filter_size_surf", 0.5);
     nh->declare_parameter<double>("filter_size_map", 0.5);
     nh->declare_parameter<double>("cube_side_length", 200);
@@ -105,6 +107,7 @@ void readParameters(shared_ptr<rclcpp::Node> &nh) {
     nh->get_parameter("common.cut_frame", cut_frame);
     nh->get_parameter("common.cut_frame_time_interval", cut_frame_time_interval);
     nh->get_parameter("common.time_lag_imu_to_lidar", time_lag_imu_to_lidar);
+    nh->get_parameter("common.timestamp_regression_tolerance", timestamp_regression_tolerance);
     nh->get_parameter("filter_size_surf", filter_size_surf_min);
     nh->get_parameter("filter_size_map", filter_size_map_min);
     nh->get_parameter("cube_side_length", cube_len);
@@ -143,4 +146,3 @@ void readParameters(shared_ptr<rclcpp::Node> &nh) {
     nh->get_parameter("pcd_save.pcd_save_en", pcd_save_en);
     nh->get_parameter("pcd_save.interval", pcd_save_interval);
 }
-

@@ -79,6 +79,12 @@ install(TARGETS
         DESTINATION lib/${PROJECT_NAME}
 )
 
+install(PROGRAMS
+        scripts/pointlio_watchdog.py
+        scripts/pointlio_pcd_shift.py
+        DESTINATION lib/${PROJECT_NAME}
+)
+
 install(
         DIRECTORY config launch rviz_cfg
         DESTINATION share/${PROJECT_NAME}

@@ -11,13 +11,14 @@
             cut_frame_time_interval: 0.1 # should be integral fraction of 1 / LiDAR frequency
             time_lag_imu_to_lidar: 0.0 # Time offset between LiDAR and IMU calibrated by other algorithms, e.g., LI-Init (find in Readme),
             # the timestamp of IMU is transferred from the current timeline to LiDAR's timeline by subtracting this value
+            timestamp_regression_tolerance: 0.02 # 仿真时钟轻微抖动容忍度（秒）
 
         preprocess:
             # 1 = Livox CustomMsg path. MID360 仿真依赖 line / offset_time 做运动补偿。
             lidar_type: 1
             scan_line: 4
             timestamp_unit: 3   # the unit of time/t field in the PointCloud2 rostopic: 0-second, 1-milisecond, 2-microsecond, 3-nanosecond.
-            blind: 0.5
+            blind: 0.6
 
         mapping:
             imu_en: true
@@ -43,23 +44,12 @@
             gravity_align: true # true to align the z axis of world frame with the direction of gravity, and the gravity direction should be specified below
             gravity: [ 0.0, 0.0, -9.810 ] # [0.0, 9.810, 0.0] # gravity to be aligned
             gravity_init: [ 0.0, 0.0, -9.810 ] # [0.0, 9.810, 0.0] # # preknown gravity in the first IMU body frame, use when imu_en is false or start from a non-stationary state
-            extrinsic_T: [ -0.011, -0.02329, 0.04412 ]
-            # extrinsic_R: [ 1.0, 0.0, 0.0,
-            #                0.0, 1.0, 0.0,
-            #                0.0, 0.0, 1.0 ]
-            
-            # 正装 0320
-            extrinsic_R: [  0.0,  1.0, 0.0,
-                           -1.0,  0.0, 0.0,
-                            0.0,  0.0, 1.0 ]
-
-            # extrinsic_R: [  0.0, -1.0, 0.0,
-            #                 1.0,  0.0, 0.0,
-            #                 0.0,  0.0, 1.0 ]
-            # 倒装
-            # extrinsic_R: [ 1.0, 0.0, 0.0,
-            #                0.0, 1.0, 0.0,
-            #                0.0, 0.0, 1.0 ]
+            # 仿真 URDF 中 livox_frame 和 imu_link 都位于车体中心线上，且无相对旋转。
+            # imu_link z = 0.11, livox_frame z = 0.15，因此 LiDAR 在 IMU 坐标系下仅有 +0.04 m 的 z 偏移。
+            extrinsic_T: [ 0.0, 0.0, 0.04 ]
+            extrinsic_R: [ 1.0, 0.0, 0.0,
+                           0.0, 1.0, 0.0,
+                           0.0, 0.0, 1.0 ]
 
         odometry:
             publish_odometry_without_downsample: true
@@ -70,6 +60,8 @@
             scan_bodyframe_pub_en: false  # true: output the point cloud scans in IMU-body-frame
 
         pcd_save:
-            pcd_save_en: false
+            # 打开仿真点云地图保存，退出 Point-LIO 后会落盘 PCD/scans.pcd，
+            # 再由脚本平移到 arena_map 的坐标系，生成 ICP 使用的 scans_sim_map.pcd。
+            pcd_save_en: true
             interval: -1                 # how many LiDAR frames saved in each pcd file;
             # -1 : all frames will be saved in ONE pcd file, may lead to memory crash when having too much frames.

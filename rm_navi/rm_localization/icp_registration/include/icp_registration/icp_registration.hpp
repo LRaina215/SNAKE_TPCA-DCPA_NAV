@@ -82,6 +82,7 @@ private:
   double xy_offset_;
   double yaw_offset_;
   double yaw_resolution_;
+  Eigen::Vector3d initial_pose_offset_{Eigen::Vector3d::Zero()};
   geometry_msgs::msg::Pose initial_pose_;
 
   bool is_ready_;

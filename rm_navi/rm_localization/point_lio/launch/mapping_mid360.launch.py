@@ -43,10 +43,10 @@ def generate_launch_description():
             'prop_at_freq_of_imu': True,
             'check_satu': True,
             'init_map_size': 10,
-            'point_filter_num': 3,  # Options: 1, 3
+            'point_filter_num': 5,  # 仿真降载：减少参与建图的点，避免 IMU 队列堆积
             'space_down_sample': True,
-            'filter_size_surf': 0.5,  # Options: 0.5, 0.3, 0.2, 0.15, 0.1
-            'filter_size_map': 0.5,  # Options: 0.5, 0.3, 0.15, 0.1
+            'filter_size_surf': 0.5,  # 仿真降载：维持较大的体素滤波
+            'filter_size_map': 0.5,  # 仿真降载：维持较大的地图体素滤波
             'cube_side_length': 1000.0,  # Option: 1000
             'runtime_pos_log_enable': False,  # Option: True
         }

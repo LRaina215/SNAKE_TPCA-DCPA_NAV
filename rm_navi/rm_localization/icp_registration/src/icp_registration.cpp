@@ -72,9 +72,14 @@ IcpNode::IcpNode(const rclcpp::NodeOptions &options)
   yaw_offset_ = this->declare_parameter("yaw_offset", 30.0) * M_PI / 180.0;
   yaw_resolution_ =
       this->declare_parameter("yaw_resolution", 10.0) * M_PI / 180.0;
+  std::vector<double> initial_pose_offset_vec = this->declare_parameter(
+      "initial_pose_offset", std::vector<double>{0.0, 0.0, 0.0});
   std::vector<double> initial_pose_vec = this->declare_parameter(
       "initial_pose", std::vector<double>{0, 0, 0, 0, 0, 0});
   try {
+    initial_pose_offset_.x() = initial_pose_offset_vec.at(0);
+    initial_pose_offset_.y() = initial_pose_offset_vec.at(1);
+    initial_pose_offset_.z() = initial_pose_offset_vec.at(2);
     initial_pose_.position.x = initial_pose_vec.at(0);
     initial_pose_.position.y = initial_pose_vec.at(1);
     initial_pose_.position.z = initial_pose_vec.at(2);
@@ -173,6 +178,7 @@ void IcpNode::initialPoseCallback(
   // Set the initial pose
   Eigen::Vector3d pos(msg->pose.pose.position.x, msg->pose.pose.position.y,
                       msg->pose.pose.position.z);
+  pos += initial_pose_offset_;
   Eigen::Quaterniond q(
       msg->pose.pose.orientation.w, msg->pose.pose.orientation.x,
       msg->pose.pose.orientation.y, msg->pose.pose.orientation.z);
@@ -183,6 +189,8 @@ void IcpNode::initialPoseCallback(
 
   // Align the pointcloud
   RCLCPP_INFO(this->get_logger(), "Aligning the pointcloud");
+  RCLCPP_INFO(this->get_logger(), "Applying initial pose offset: %.3f, %.3f, %.3f",
+              initial_pose_offset_.x(), initial_pose_offset_.y(), initial_pose_offset_.z());
   Eigen::Matrix4d map_to_laser = multiAlignSync(cloud_in_, initial_guess);
   // Eigen::Matrix4d result = align(cloud_in_, initial_guess);
   if (!success_) {
@@ -292,13 +300,17 @@ Eigen::Matrix4d IcpNode::multiAlignSync(PointCloudXYZI::Ptr source,
   Eigen::AngleAxisf pitchAngle(rpy(1), Eigen::Vector3f::UnitY());
   std::vector<Eigen::Matrix4f> candidates;
   Eigen::Matrix4f temp_pose;
+  const int yaw_steps =
+      yaw_resolution_ > 1e-6 ? static_cast<int>(std::round(yaw_offset_ / yaw_resolution_)) : 0;
 
   RCLCPP_INFO(this->get_logger(), "initial guess: %f, %f, %f, %f, %f, %f",
               xyz(0), xyz(1), xyz(2), rpy(0), rpy(1), rpy(2));
+  RCLCPP_INFO(this->get_logger(), "ICP search windows: xy_offset=%.3f yaw_steps=%d yaw_resolution=%.3f rad",
+              xy_offset_, yaw_steps, yaw_resolution_);
 
   for (int i = -1; i <= 1; i++) {
     for (int j = -1; j <= 1; j++) {
-      for (int k = -yaw_offset_; k <= yaw_offset_; k++) {
+      for (int k = -yaw_steps; k <= yaw_steps; k++) {
         Eigen::Vector3f pos(xyz(0) + i * xy_offset_, xyz(1) + j * xy_offset_,
                             xyz(2));
         Eigen::AngleAxisf yawAngle(rpy(2) + k * yaw_resolution_,
