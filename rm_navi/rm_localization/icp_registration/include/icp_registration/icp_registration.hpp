@@ -2,6 +2,7 @@
 #define ICP_REGISTRATION_HPP
 
 // std
+#include <atomic>
 #include <filesystem>
 #include <mutex>
 
@@ -37,6 +38,7 @@ private:
   void pointcloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg);
   void initialPoseCallback(
       const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg);
+  void continuousRelocalizationCallback();
 
   static PointCloudXYZN::Ptr addNorm(PointCloudXYZ::Ptr cloud);
 
@@ -51,12 +53,13 @@ private:
       initial_pose_sub_;
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr
       pointcloud_sub_;
-  // rclcpp::TimerBase::SharedPtr timer_;
+  rclcpp::TimerBase::SharedPtr relocalization_timer_;
   std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
   std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
 
   std::mutex mutex_;
+  std::mutex align_mutex_;
   std::unique_ptr<std::thread> tf_publisher_thread_;
 
   // Voxelfilter used to downsample the pointcloud
@@ -82,6 +85,10 @@ private:
   double xy_offset_;
   double yaw_offset_;
   double yaw_resolution_;
+  bool continuous_relocalization_enabled_;
+  double continuous_relocalization_frequency_;
+  double max_translation_jump_;
+  double max_yaw_jump_;
   Eigen::Vector3d initial_pose_offset_{Eigen::Vector3d::Zero()};
   geometry_msgs::msg::Pose initial_pose_;
 

@@ -1,7 +1,9 @@
 #include "icp_registration/icp_registration.hpp"
 #include <Eigen/src/Geometry/Quaternion.h>
 #include <Eigen/src/Geometry/Transform.h>
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <geometry_msgs/msg/detail/pose_with_covariance_stamped__struct.hpp>
 #include <iostream>
 #include <pcl/features/normal_3d.h>
@@ -13,6 +15,39 @@
 #include <tf2_ros/create_timer_ros.h>
 
 namespace icp {
+
+namespace {
+
+double normalizeAngle(double angle) {
+  while (angle > M_PI) {
+    angle -= 2.0 * M_PI;
+  }
+  while (angle < -M_PI) {
+    angle += 2.0 * M_PI;
+  }
+  return angle;
+}
+
+double yawFromRotation(const Eigen::Matrix3d &rotation) {
+  return std::atan2(rotation(1, 0), rotation(0, 0));
+}
+
+Eigen::Quaterniond quaternionFromYaw(double yaw) {
+  return Eigen::Quaterniond(Eigen::AngleAxisd(yaw, Eigen::Vector3d::UnitZ()));
+}
+
+Eigen::Matrix4d transformToMatrix(const geometry_msgs::msg::Transform &transform) {
+  Eigen::Matrix4d out = Eigen::Matrix4d::Identity();
+  Eigen::Quaterniond q(transform.rotation.w, transform.rotation.x,
+                       transform.rotation.y, transform.rotation.z);
+  out.block<3, 3>(0, 0) = q.toRotationMatrix();
+  out(0, 3) = transform.translation.x;
+  out(1, 3) = transform.translation.y;
+  out(2, 3) = transform.translation.z;
+  return out;
+}
+
+}  // namespace
 
 IcpNode::IcpNode(const rclcpp::NodeOptions &options)
     : Node("icp_registration", options), rough_iter_(10), refine_iter_(5),
@@ -68,6 +103,14 @@ IcpNode::IcpNode(const rclcpp::NodeOptions &options)
   yaw_offset_ = this->declare_parameter("yaw_offset", 30.0) * M_PI / 180.0;
   yaw_resolution_ =
       this->declare_parameter("yaw_resolution", 10.0) * M_PI / 180.0;
+  continuous_relocalization_enabled_ =
+      this->declare_parameter("continuous_relocalization", true);
+  continuous_relocalization_frequency_ =
+      this->declare_parameter("continuous_relocalization_frequency", 1.0);
+  max_translation_jump_ =
+      this->declare_parameter("max_translation_jump", 0.8);
+  max_yaw_jump_ = this->declare_parameter("max_yaw_jump_deg", 15.0) *
+                  M_PI / 180.0;
   std::vector<double> initial_pose_offset_vec = this->declare_parameter(
       "initial_pose_offset", std::vector<double>{0.0, 0.0, 0.0});
   std::vector<double> initial_pose_vec = this->declare_parameter(
@@ -113,6 +156,14 @@ IcpNode::IcpNode(const rclcpp::NodeOptions &options)
   tf_buffer_->setCreateTimerInterface(timer_interface);
   tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
 
+  if (continuous_relocalization_enabled_ &&
+      continuous_relocalization_frequency_ > 0.0) {
+    const auto period = std::chrono::milliseconds(static_cast<int>(
+        std::max(200.0, 1000.0 / continuous_relocalization_frequency_)));
+    relocalization_timer_ = this->create_wall_timer(
+        period, std::bind(&IcpNode::continuousRelocalizationCallback, this));
+  }
+
   // Set up the timer
   // timer_ = create_wall_timer(std::chrono::milliseconds(10), [this]() {
   //   if (is_ready_) {
@@ -157,7 +208,10 @@ void IcpNode::pointcloudCallback(
     const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
   PointCloudXYZ incoming_cloud;
   pcl::fromROSMsg(*msg, incoming_cloud);
-  *cloud_in_ = incoming_cloud;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    *cloud_in_ = incoming_cloud;
+  }
   if (first_scan_ || !is_ready_) {
     auto pose_msg =
         std::make_shared<geometry_msgs::msg::PoseWithCovarianceStamped>();
@@ -172,6 +226,17 @@ void IcpNode::pointcloudCallback(
 
 void IcpNode::initialPoseCallback(
     const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg) {
+  std::lock_guard<std::mutex> align_lock(align_mutex_);
+  PointCloudXYZ::Ptr cloud_snapshot(new PointCloudXYZ);
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (cloud_in_->empty()) {
+      RCLCPP_WARN(this->get_logger(),
+                  "Skipping ICP init because no point cloud has been received yet");
+      return;
+    }
+    *cloud_snapshot = *cloud_in_;
+  }
 
   // Set the initial pose
   Eigen::Vector3d pos(msg->pose.pose.position.x, msg->pose.pose.position.y,
@@ -189,7 +254,7 @@ void IcpNode::initialPoseCallback(
   RCLCPP_INFO(this->get_logger(), "Aligning the pointcloud");
   RCLCPP_INFO(this->get_logger(), "Applying initial pose offset: %.3f, %.3f, %.3f",
               initial_pose_offset_.x(), initial_pose_offset_.y(), initial_pose_offset_.z());
-  Eigen::Matrix4d map_to_laser = multiAlignSync(cloud_in_, initial_guess);
+  Eigen::Matrix4d map_to_laser = multiAlignSync(cloud_snapshot, initial_guess);
   // Eigen::Matrix4d result = align(cloud_in_, initial_guess);
   if (!success_) {
     map_to_laser = initial_guess;
@@ -223,17 +288,105 @@ void IcpNode::initialPoseCallback(
   Eigen::Matrix4d result = map_to_laser * laser_to_odom.matrix().cast<double>();
   {
     std::lock_guard lock(mutex_);
+    const Eigen::Matrix3d rotation = result.block<3, 3>(0, 0);
+    const double yaw = yawFromRotation(rotation);
+    q = quaternionFromYaw(yaw);
+
     map_to_odom_.transform.translation.x = result(0, 3);
     map_to_odom_.transform.translation.y = result(1, 3);
-    map_to_odom_.transform.translation.z = result(2, 3);
-
-    Eigen::Matrix3d rotation = result.block<3, 3>(0, 0);
-    q = Eigen::Quaterniond(rotation);
-
+    map_to_odom_.transform.translation.z = 0.0;
     map_to_odom_.transform.rotation.w = q.w();
     map_to_odom_.transform.rotation.x = q.x();
     map_to_odom_.transform.rotation.y = q.y();
     map_to_odom_.transform.rotation.z = q.z();
+    is_ready_ = true;
+  }
+}
+
+void IcpNode::continuousRelocalizationCallback() {
+  if (!continuous_relocalization_enabled_ || first_scan_) {
+    return;
+  }
+
+  std::unique_lock<std::mutex> align_lock(align_mutex_, std::try_to_lock);
+  if (!align_lock.owns_lock()) {
+    return;
+  }
+
+  PointCloudXYZ::Ptr cloud_snapshot(new PointCloudXYZ);
+  geometry_msgs::msg::TransformStamped current_map_to_odom;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!is_ready_ || cloud_in_->empty()) {
+      return;
+    }
+    *cloud_snapshot = *cloud_in_;
+    current_map_to_odom = map_to_odom_;
+  }
+
+  Eigen::Matrix4d laser_to_odom = Eigen::Matrix4d::Identity();
+  try {
+    auto transform =
+        tf_buffer_->lookupTransform(laser_frame_id_, odom_frame_id_,
+                                    tf2::TimePointZero);
+    Eigen::Vector3d t(transform.transform.translation.x,
+                      transform.transform.translation.y,
+                      transform.transform.translation.z);
+    Eigen::Quaterniond q(transform.transform.rotation.w,
+                         transform.transform.rotation.x,
+                         transform.transform.rotation.y,
+                         transform.transform.rotation.z);
+    laser_to_odom.block<3, 3>(0, 0) = q.toRotationMatrix();
+    laser_to_odom.block<3, 1>(0, 3) = t;
+  } catch (tf2::TransformException &ex) {
+    RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                         "Skipping continuous ICP: %s", ex.what());
+    return;
+  }
+
+  const Eigen::Matrix4d current_map_to_odom_matrix =
+      transformToMatrix(current_map_to_odom.transform);
+  const Eigen::Matrix4d initial_guess =
+      current_map_to_odom_matrix * laser_to_odom.inverse();
+
+  Eigen::Matrix4d map_to_laser = multiAlignSync(cloud_snapshot, initial_guess);
+  if (!success_) {
+    RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                         "Continuous ICP update rejected because alignment failed");
+    return;
+  }
+
+  const Eigen::Matrix4d candidate_map_to_odom =
+      map_to_laser * laser_to_odom.matrix().cast<double>();
+  const double dx =
+      candidate_map_to_odom(0, 3) - current_map_to_odom_matrix(0, 3);
+  const double dy =
+      candidate_map_to_odom(1, 3) - current_map_to_odom_matrix(1, 3);
+  const double translation_jump = std::hypot(dx, dy);
+  const double current_yaw =
+      yawFromRotation(current_map_to_odom_matrix.block<3, 3>(0, 0));
+  const double candidate_yaw =
+      yawFromRotation(candidate_map_to_odom.block<3, 3>(0, 0));
+  const double yaw_jump = std::abs(normalizeAngle(candidate_yaw - current_yaw));
+
+  if (translation_jump > max_translation_jump_ || yaw_jump > max_yaw_jump_) {
+    RCLCPP_WARN_THROTTLE(
+        this->get_logger(), *this->get_clock(), 2000,
+        "Rejecting continuous ICP jump: dxy=%.3f m dyaw=%.3f rad score=%.4f",
+        translation_jump, yaw_jump, score_);
+    return;
+  }
+
+  const Eigen::Quaterniond planar_q = quaternionFromYaw(candidate_yaw);
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    map_to_odom_.transform.translation.x = candidate_map_to_odom(0, 3);
+    map_to_odom_.transform.translation.y = candidate_map_to_odom(1, 3);
+    map_to_odom_.transform.translation.z = 0.0;
+    map_to_odom_.transform.rotation.w = planar_q.w();
+    map_to_odom_.transform.rotation.x = planar_q.x();
+    map_to_odom_.transform.rotation.y = planar_q.y();
+    map_to_odom_.transform.rotation.z = planar_q.z();
     is_ready_ = true;
   }
 }

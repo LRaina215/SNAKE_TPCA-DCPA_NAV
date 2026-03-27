@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import math
 import rclpy
 from rclpy.node import Node
 from nav_msgs.msg import Odometry
@@ -22,11 +23,32 @@ def qv_mult(q1, v1):
     q2 = [v1[0], v1[1], v1[2], 0.0]
     return q_mult(q_mult(q1, q2), q_inverse(q1))[0:3]
 
+def yaw_from_quat(q):
+    x, y, z, w = q
+    siny_cosp = 2.0 * (w * z + x * y)
+    cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
+    return math.atan2(siny_cosp, cosy_cosp)
+
+def quat_from_yaw(yaw):
+    half = yaw * 0.5
+    return [0.0, 0.0, math.sin(half), math.cos(half)]
+
+def wrap_angle(angle):
+    while angle > math.pi:
+        angle -= 2.0 * math.pi
+    while angle < -math.pi:
+        angle += 2.0 * math.pi
+    return angle
+
 class OdomToBaseTF(Node):
     def __init__(self):
         super().__init__(
             'odom_to_base_tf',
             automatically_declare_parameters_from_overrides=True
+        )
+        self.max_xy_step = self.declare_parameter('max_xy_step', 1.0).value
+        self.max_yaw_step = math.radians(
+            self.declare_parameter('max_yaw_step_deg', 20.0).value
         )
         self.tf_broadcaster = TransformBroadcaster(self)
         self.tf_buffer = Buffer()
@@ -35,6 +57,7 @@ class OdomToBaseTF(Node):
         self.cached_tf = None
         self.latest_pose = None
         self.latest_twist = None
+        self.last_accepted_pose = None
         self.subscription = self.create_subscription(Odometry, '/odom_livox', self.odom_callback, 10)
         self.timer = self.create_timer(0.02, self.publish_cached_state)
         
@@ -64,6 +87,25 @@ class OdomToBaseTF(Node):
         q_ob = q_mult(q_ol, q_lb)
         t_rotated = qv_mult(q_ol, t_lb)
         t_ob = [t_ol[0] + t_rotated[0], t_ol[1] + t_rotated[1], t_ol[2] + t_rotated[2]]
+        yaw = yaw_from_quat(q_ob)
+
+        if self.last_accepted_pose is not None:
+            dx = t_ob[0] - self.last_accepted_pose['x']
+            dy = t_ob[1] - self.last_accepted_pose['y']
+            dxy = math.hypot(dx, dy)
+            dyaw = abs(wrap_angle(yaw - self.last_accepted_pose['yaw']))
+            if dxy > self.max_xy_step or dyaw > self.max_yaw_step:
+                self.get_logger().warn(
+                    f"Rejecting odom jump dxy={dxy:.3f} m dyaw={dyaw:.3f} rad"
+                )
+                return
+
+        planar_q = quat_from_yaw(yaw)
+        self.last_accepted_pose = {
+            'x': t_ob[0],
+            'y': t_ob[1],
+            'yaw': yaw,
+        }
 
         # 2. 用逆矩阵把雷达的速度旋转回底盘！
         v_l = [msg.twist.twist.linear.x, msg.twist.twist.linear.y, msg.twist.twist.linear.z]
@@ -78,18 +120,18 @@ class OdomToBaseTF(Node):
         self.latest_pose = {
             'x': t_ob[0],
             'y': t_ob[1],
-            'z': t_ob[2],
-            'qx': q_ob[0],
-            'qy': q_ob[1],
-            'qz': q_ob[2],
-            'qw': q_ob[3],
+            'z': 0.0,
+            'qx': planar_q[0],
+            'qy': planar_q[1],
+            'qz': planar_q[2],
+            'qw': planar_q[3],
         }
         self.latest_twist = {
             'vx': v_b[0],
             'vy': v_b[1],
-            'vz': v_b[2],
-            'wx': w_b[0],
-            'wy': w_b[1],
+            'vz': 0.0,
+            'wx': 0.0,
+            'wy': 0.0,
             'wz': w_b[2],
         }
 
