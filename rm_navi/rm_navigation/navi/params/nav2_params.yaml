@@ -102,23 +102,23 @@ controller_server:
   ros__parameters:
     use_sim_time: True
     controller_frequency: 20.0
-    min_x_velocity_threshold: 0.001
-    min_y_velocity_threshold: 0.01
+    min_x_velocity_threshold: 0.02
+    min_y_velocity_threshold: 0.02
     min_theta_velocity_threshold: 0.001
-    failure_tolerance: 0.3
+    failure_tolerance: 1.5
     progress_checker_plugin: "progress_checker"
     goal_checker_plugins: ["general_goal_checker"] 
     controller_plugins: ["FollowPath"]
 
     progress_checker:
       plugin: "nav2_controller::SimpleProgressChecker"
-      required_movement_radius: 0.5
-      movement_time_allowance: 3.0
+      required_movement_radius: 0.15
+      movement_time_allowance: 8.0
     
     general_goal_checker:
       stateful: True
       plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.25
+      xy_goal_tolerance: 0.15
       # yaw_goal_tolerance: 0.5
       yaw_goal_tolerance: 6.28
 
@@ -127,35 +127,35 @@ controller_server:
       plugin: "dwb_core::DWBLocalPlanner"
       default_critic_namespaces: ["dwb_critics", "tcpa_dcpa_critic"]
       debug_trajectory_details: True
-      min_vel_x: -20.0
-      min_vel_y: -20.0
-      max_vel_x: 20.0  # 适配您的备份设置
-      max_vel_y: 20.0
+      min_vel_x: -1.0
+      min_vel_y: -1.0
+      max_vel_x: 1.8
+      max_vel_y: 1.8
       max_vel_theta: 0.0
-      min_speed_xy: 1.5
-      max_speed_xy: 20.0
-      min_speed_theta: 0.15
-      acc_lim_x: 15.0
-      acc_lim_y: 15.0
-      acc_lim_theta: 5.0
-      decel_lim_x: -15.0
-      decel_lim_y: -15.0
-      decel_lim_theta: -3.2
-      vx_samples: 40
-      vy_samples: 40
+      min_speed_xy: 0.0
+      max_speed_xy: 2.2
+      min_speed_theta: 0.0
+      acc_lim_x: 5.0
+      acc_lim_y: 5.0
+      acc_lim_theta: 1.0
+      decel_lim_x: -5.0
+      decel_lim_y: -5.0
+      decel_lim_theta: -1.0
+      vx_samples: 15
+      vy_samples: 15
       vtheta_samples: 1
-      sim_time: 0.8
+      sim_time: 0.6
       linear_granularity: 0.05
       angular_granularity: 0.025
       transform_tolerance: 2.0
-      xy_goal_tolerance: 0.25
-      trans_stopped_velocity: 0.25
+      xy_goal_tolerance: 0.15
+      trans_stopped_velocity: 0.05
 
       # 【新增】定义什么叫“旋转停稳了”
       # 设大一点（比如 0.25），只要转得不快，就算停稳，立刻切下一个点
-      rot_stopped_velocity: 0.25
+      rot_stopped_velocity: 0.05
 
-      short_circuit_trajectory_evaluation: False # change
+      short_circuit_trajectory_evaluation: True
       stateful: True
       # critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "GoalAlign", "PathAlign", "PathDist", "GoalDist"]
       # 【修改后】删掉 "RotateToGoal"
@@ -163,18 +163,18 @@ controller_server:
       # BaseObstacle.scale: 0.02
       # 【新增】加大对障碍物的恐惧 (BaseObstacle)
       # 如果它老是往障碍物堆里扎，说明它对碰撞的惩罚不够重视
-      BaseObstacle.scale: 0.05  # 原值 0.02 -> 建议翻倍
+      BaseObstacle.scale: 0.18
       PathAlign.scale: 0.0
       PathAlign.forward_point_distance: 0.1
       # GoalAlign.scale: 24.0
       GoalAlign.scale: 0.0
       GoalAlign.forward_point_distance: 0.1
-      PathDist.scale: 2.0            # 【削弱】给它极大的自由度去绕路，不再死板循迹
-      GoalDist.scale: 20.0           # 【削弱】目标吸引力减半，活着比到达终点更重要
+      PathDist.scale: 28.0
+      GoalDist.scale: 16.0
       TCPADCPA.plugin: "tcpa_dcpa_critic::TCPADCPACritic"
-      TCPADCPA.scale: 80.0           # 【史诗级加强】避障权重拉满！把它变成最高生存法则！
-      TCPADCPA.tau_safe: 4.0         # 【提前预判】原先的 2.0s 属于“极限微操”，改成 4.0s 让它大老远就开始规划绕行曲线
-      TCPADCPA.sigma_safe: 1.0       # 【极度关键】原先的 0.5m 太小了！机器人半径0.3m + 障碍物半径0.3m = 0.6m，0.5m 意味着底盘已经撞上了！强制拉开 1.0 米的绝对安全距离！
+      TCPADCPA.scale: 5.0
+      TCPADCPA.tau_safe: 1.0
+      TCPADCPA.sigma_safe: 0.6
       TCPADCPA.tracked_topic: "/tracked_obstacles"
       RotateToGoal.scale: 0.0
       RotateToGoal.slowing_factor: 5.0
@@ -248,25 +248,27 @@ controller_server_rclcpp_node:
 local_costmap:
   local_costmap:
     ros__parameters:
-      update_frequency: 30.0
-      publish_frequency: 30.0
+      update_frequency: 10.0
+      publish_frequency: 10.0
       global_frame: odom
       robot_base_frame: base_link
       use_sim_time: True
       rolling_window: true
       transform_tolerance: 2.0
-      width: 5 # 保持 Galactic 默认，或者改为您备份的 2
-      height: 5
+      width: 7
+      height: 7
       resolution: 0.05 #robot_radius 【统一】从 0.05 改为 0.1，减轻负载
-      robot_radius: 0.18 # 【统一】适配您的机器人
+      footprint: "[[0.275, 0.225], [0.275, -0.225], [-0.275, -0.225], [-0.275, 0.225]]"
+      footprint_padding: 0.01
+      robot_radius: 0.36
       plugins: ["obstacle_layer", "inflation_layer"]
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         # cost_scaling_factor
         # 这个值越大，障碍物旁边的危险区衰减越快。
         # 意思是：只要不撞上，离近点也没事。这会让机器人敢于走直路穿过狭窄区域。
-        cost_scaling_factor: 15.0
-        inflation_radius: 0.2 # 【统一】适配您的备份
+        cost_scaling_factor: 4.0
+        inflation_radius: 0.45
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: True
@@ -303,7 +305,9 @@ global_costmap:
       robot_base_frame: base_link
       use_sim_time: True
       transform_tolerance: 2.0
-      robot_radius: 0.23 # 【统一】适配您的机器人
+      footprint: "[[0.275, 0.225], [0.275, -0.225], [-0.275, -0.225], [-0.275, 0.225]]"
+      footprint_padding: 0.01
+      robot_radius: 0.36
       resolution: 0.1  # 【统一】从 0.05 改为 0.1
       track_unknown_space: true
       plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
@@ -330,7 +334,7 @@ global_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.0
-        inflation_radius: 0.27 # 【统一】适配您的备份
+        inflation_radius: 0.55
       always_send_full_costmap: True
   global_costmap_client:
     ros__parameters:

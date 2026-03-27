@@ -207,7 +207,8 @@
     <model name="obs1">
       <pose>-1.0 -3.0 0.75 0 0 0</pose>
       <link name="obs1_link">
-        <gravity>false</gravity>
+        <gravity>true</gravity>
+        <kinematic>true</kinematic>
         <self_collide>false</self_collide>
         <inertial>
           <mass>12.0</mass>
@@ -227,6 +228,28 @@
               <length>1.5</length>
             </cylinder>
           </geometry>
+          <surface>
+            <friction>
+              <ode>
+                <mu>10.0</mu>
+                <mu2>10.0</mu2>
+                <slip1>0.0</slip1>
+                <slip2>0.0</slip2>
+              </ode>
+            </friction>
+            <bounce>
+              <restitution_coefficient>0.0</restitution_coefficient>
+              <threshold>1000000.0</threshold>
+            </bounce>
+            <contact>
+              <ode>
+                <kp>10000000.0</kp>
+                <kd>100000.0</kd>
+                <max_vel>0.0</max_vel>
+                <min_depth>0.001</min_depth>
+              </ode>
+            </contact>
+          </surface>
         </collision>
         <visual name="visual">
           <geometry>
@@ -259,7 +282,8 @@
     <model name="obs2">
       <pose>4.0 0.0 0.75 0 0 0</pose>
       <link name="obs2_link">
-        <gravity>false</gravity>
+        <gravity>true</gravity>
+        <kinematic>true</kinematic>
         <self_collide>false</self_collide>
         <inertial>
           <mass>12.0</mass>
@@ -279,6 +303,28 @@
               <length>1.5</length>
             </cylinder>
           </geometry>
+          <surface>
+            <friction>
+              <ode>
+                <mu>10.0</mu>
+                <mu2>10.0</mu2>
+                <slip1>0.0</slip1>
+                <slip2>0.0</slip2>
+              </ode>
+            </friction>
+            <bounce>
+              <restitution_coefficient>0.0</restitution_coefficient>
+              <threshold>1000000.0</threshold>
+            </bounce>
+            <contact>
+              <ode>
+                <kp>10000000.0</kp>
+                <kd>100000.0</kd>
+                <max_vel>0.0</max_vel>
+                <min_depth>0.001</min_depth>
+              </ode>
+            </contact>
+          </surface>
         </collision>
         <visual name="visual">
           <geometry>
