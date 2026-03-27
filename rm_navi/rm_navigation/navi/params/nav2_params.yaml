@@ -132,7 +132,7 @@ controller_server:
       max_vel_x: 20.0  # 适配您的备份设置
       max_vel_y: 20.0
       max_vel_theta: 0.0
-      min_speed_xy: 1.0
+      min_speed_xy: 1.5
       max_speed_xy: 20.0
       min_speed_theta: 0.15
       acc_lim_x: 15.0
@@ -163,18 +163,18 @@ controller_server:
       # BaseObstacle.scale: 0.02
       # 【新增】加大对障碍物的恐惧 (BaseObstacle)
       # 如果它老是往障碍物堆里扎，说明它对碰撞的惩罚不够重视
-      BaseObstacle.scale: 0.02  # 原值 0.02 -> 建议翻倍
+      BaseObstacle.scale: 0.05  # 原值 0.02 -> 建议翻倍
       PathAlign.scale: 0.0
       PathAlign.forward_point_distance: 0.1
       # GoalAlign.scale: 24.0
       GoalAlign.scale: 0.0
       GoalAlign.forward_point_distance: 0.1
-      PathDist.scale: 5.0
-      GoalDist.scale: 50.0
+      PathDist.scale: 2.0            # 【削弱】给它极大的自由度去绕路，不再死板循迹
+      GoalDist.scale: 20.0           # 【削弱】目标吸引力减半，活着比到达终点更重要
       TCPADCPA.plugin: "tcpa_dcpa_critic::TCPADCPACritic"
-      TCPADCPA.scale: 10.0
-      TCPADCPA.tau_safe: 2.0
-      TCPADCPA.sigma_safe: 0.5
+      TCPADCPA.scale: 80.0           # 【史诗级加强】避障权重拉满！把它变成最高生存法则！
+      TCPADCPA.tau_safe: 4.0         # 【提前预判】原先的 2.0s 属于“极限微操”，改成 4.0s 让它大老远就开始规划绕行曲线
+      TCPADCPA.sigma_safe: 1.0       # 【极度关键】原先的 0.5m 太小了！机器人半径0.3m + 障碍物半径0.3m = 0.6m，0.5m 意味着底盘已经撞上了！强制拉开 1.0 米的绝对安全距离！
       TCPADCPA.tracked_topic: "/tracked_obstacles"
       RotateToGoal.scale: 0.0
       RotateToGoal.slowing_factor: 5.0
