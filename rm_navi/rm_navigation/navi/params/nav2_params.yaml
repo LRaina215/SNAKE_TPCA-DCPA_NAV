@@ -37,7 +37,7 @@ amcl:
     z_max: 0.05
     z_rand: 0.5
     z_short: 0.05
-    scan_topic: scan
+    scan_topic: scan_nav
 
 amcl_map_client:
   ros__parameters:
@@ -274,9 +274,9 @@ local_costmap:
         enabled: True
         observation_sources: scan
         scan:
-          topic: /scan
-          # /scan 由 pointcloud_to_laserscan 以 base_link 为目标坐标系发布
-          sensor_frame: base_link
+          topic: /scan_nav
+          # /scan_nav 由 Gazebo 中独立的 2D ray 传感器直接发布
+          sensor_frame: nav_scan_frame
           max_obstacle_height: 2.0
           clearing: True
           marking: True
@@ -316,9 +316,9 @@ global_costmap:
         enabled: True
         observation_sources: scan
         scan:
-          topic: /scan
-          # /scan 由 pointcloud_to_laserscan 以 base_link 为目标坐标系发布
-          sensor_frame: base_link
+          topic: /scan_nav
+          # /scan_nav 由 Gazebo 中独立的 2D ray 传感器直接发布
+          sensor_frame: nav_scan_frame
           max_obstacle_height: 2.0
           clearing: True
           marking: True

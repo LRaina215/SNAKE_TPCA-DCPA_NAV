@@ -78,6 +78,7 @@ public:
     voxel_leaf_size_ = declare_parameter<double>("voxel_leaf_size", 0.1);
     measurement_noise_position_ = declare_parameter<double>("measurement_noise_position", 0.08);
     velocity_arrow_scale_ = declare_parameter<double>("velocity_arrow_scale", 0.5);
+    input_timeout_sec_ = declare_parameter<double>("input_timeout_sec", 1.0);
 
     tf_buffer_ = std::make_shared<tf2_ros::Buffer>(get_clock());
     tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
@@ -89,6 +90,9 @@ public:
     tracked_pub_ = create_publisher<predictive_navigation_msgs::msg::TrackedObstacleArray>(
       tracked_topic_, 10);
     marker_pub_ = create_publisher<visualization_msgs::msg::MarkerArray>(marker_topic_, 10);
+    watchdog_timer_ = create_wall_timer(
+      std::chrono::milliseconds(100),
+      std::bind(&DynamicTrackerNode::watchdogCallback, this));
 
     RCLCPP_INFO(get_logger(), "Dynamic tracker listening on %s", input_topic_.c_str());
   }
@@ -96,6 +100,11 @@ public:
 private:
   void pointCloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
   {
+    last_input_receive_time_ = get_clock()->now();
+    last_output_header_ = msg->header;
+    input_received_once_ = true;
+    stale_timeout_handled_ = false;
+
     sensor_msgs::msg::PointCloud2 transformed_cloud_msg;
     try {
       const geometry_msgs::msg::TransformStamped transform_stamped =
@@ -137,6 +146,35 @@ private:
     std::vector<Detection> detections = extractDetections(cloud_xyz, cloud_flat);
     updateTracks(detections, rclcpp::Time(transformed_cloud_msg.header.stamp));
     publishTrackedObstacles(transformed_cloud_msg.header);
+  }
+
+  void watchdogCallback()
+  {
+    if (!input_received_once_ || stale_timeout_handled_) {
+      return;
+    }
+
+    const double silence_seconds = (get_clock()->now() - last_input_receive_time_).seconds();
+    if (silence_seconds <= input_timeout_sec_) {
+      return;
+    }
+
+    if (!tracks_.empty() || !previous_marker_ids_.empty()) {
+      RCLCPP_WARN(
+        get_logger(),
+        "No obstacle cloud for %.2f s (> %.2f s). Clearing stale tracked obstacles.",
+        silence_seconds, input_timeout_sec_);
+    }
+
+    tracks_.clear();
+
+    std_msgs::msg::Header header = last_output_header_;
+    header.stamp = get_clock()->now();
+    if (header.frame_id.empty()) {
+      header.frame_id = target_frame_;
+    }
+    publishTrackedObstacles(header);
+    stale_timeout_handled_ = true;
   }
 
   std::vector<Detection> extractDetections(
@@ -491,13 +529,19 @@ private:
   double voxel_leaf_size_{0.1};
   double measurement_noise_position_{0.08};
   double velocity_arrow_scale_{0.5};
+  double input_timeout_sec_{1.0};
   int next_track_id_{0};
+  bool input_received_once_{false};
+  bool stale_timeout_handled_{false};
+  rclcpp::Time last_input_receive_time_{0, 0, RCL_ROS_TIME};
+  std_msgs::msg::Header last_output_header_;
 
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr cloud_sub_;
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
   std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
   rclcpp::Publisher<predictive_navigation_msgs::msg::TrackedObstacleArray>::SharedPtr tracked_pub_;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr marker_pub_;
+  rclcpp::TimerBase::SharedPtr watchdog_timer_;
   std::unordered_map<int, Track> tracks_;
   std::unordered_set<int> previous_marker_ids_;
 };
