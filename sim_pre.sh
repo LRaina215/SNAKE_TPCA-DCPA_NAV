@@ -21,7 +21,7 @@ export RCUTILS_LOGGING_BUFFERED_STREAM=1
 tabs=(
   "Sim|ros2 launch tcpa_sim_env sim_launch.py"
   "Point-LIO|ros2 launch point_lio mapping_mid360.launch.py use_sim_time:=True rviz:=false"
-  "Segmentation|ros2 launch linefit_ground_segmentation_ros segmentation.launch.py"
+  "Segmentation|ros2 launch terrain_analysis terrain_analysis.launch use_sim_time:=True"
   "Tracker|ros2 launch predictive_tracker dynamic_tracker.launch.py use_sim_time:=True"
   "Scan|ros2 launch pointcloud_to_laserscan pointcloud_to_laserscan_launch.py use_sim_time:=True target_frame:=base_link"
 )
