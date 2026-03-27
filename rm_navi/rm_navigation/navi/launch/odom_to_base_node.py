@@ -24,16 +24,22 @@ def qv_mult(q1, v1):
 
 class OdomToBaseTF(Node):
     def __init__(self):
-        super().__init__('odom_to_base_tf')
+        super().__init__(
+            'odom_to_base_tf',
+            automatically_declare_parameters_from_overrides=True
+        )
         self.tf_broadcaster = TransformBroadcaster(self)
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
         
-        self.cached_tf = None  
-        self.subscription = self.create_subscription(Odometry, '/odom', self.odom_callback, 10)
+        self.cached_tf = None
+        self.latest_pose = None
+        self.latest_twist = None
+        self.subscription = self.create_subscription(Odometry, '/odom_livox', self.odom_callback, 10)
+        self.timer = self.create_timer(0.02, self.publish_cached_state)
         
-        # 发布专供 Nav2 控制器读取的“底盘真实速度”
-        self.odom_pub = self.create_publisher(Odometry, '/odom_base', 10)
+        # 发布专供 Nav2 / 下游过滤链读取的底盘里程计
+        self.odom_pub = self.create_publisher(Odometry, '/odom', 10)
 
     def odom_callback(self, msg):
         if self.cached_tf is None:
@@ -59,21 +65,7 @@ class OdomToBaseTF(Node):
         t_rotated = qv_mult(q_ol, t_lb)
         t_ob = [t_ol[0] + t_rotated[0], t_ol[1] + t_rotated[1], t_ol[2] + t_rotated[2]]
 
-        # 2. 发布同步系统时间的 TF
-        t = TransformStamped()
-        t.header.stamp = self.get_clock().now().to_msg()
-        t.header.frame_id = 'odom'
-        t.child_frame_id = 'base_link'
-        t.transform.translation.x = t_ob[0]
-        t.transform.translation.y = t_ob[1]
-        t.transform.translation.z = t_ob[2]
-        t.transform.rotation.x = q_ob[0]
-        t.transform.rotation.y = q_ob[1]
-        t.transform.rotation.z = q_ob[2]
-        t.transform.rotation.w = q_ob[3]
-        self.tf_broadcaster.sendTransform(t)
-
-        # 3. 用逆矩阵把雷达的速度旋转回底盘！
+        # 2. 用逆矩阵把雷达的速度旋转回底盘！
         v_l = [msg.twist.twist.linear.x, msg.twist.twist.linear.y, msg.twist.twist.linear.z]
         w_l = [msg.twist.twist.angular.x, msg.twist.twist.angular.y, msg.twist.twist.angular.z]
 
@@ -81,26 +73,64 @@ class OdomToBaseTF(Node):
         v_b = qv_mult(q_bl, v_l) 
         w_b = qv_mult(q_bl, w_l) 
 
-        # 4. 组装并发布纯净的底盘 Odometry
+        # 3. 缓存最新位姿，50Hz timer 会盖上最新仿真时间持续发布，
+        # 避免 Point-LIO 帧率下降时下游 TF 饥饿。
+        self.latest_pose = {
+            'x': t_ob[0],
+            'y': t_ob[1],
+            'z': t_ob[2],
+            'qx': q_ob[0],
+            'qy': q_ob[1],
+            'qz': q_ob[2],
+            'qw': q_ob[3],
+        }
+        self.latest_twist = {
+            'vx': v_b[0],
+            'vy': v_b[1],
+            'vz': v_b[2],
+            'wx': w_b[0],
+            'wy': w_b[1],
+            'wz': w_b[2],
+        }
+
+    def publish_cached_state(self):
+        if self.latest_pose is None or self.latest_twist is None:
+            return
+
+        stamp = self.get_clock().now().to_msg()
+
+        t = TransformStamped()
+        t.header.stamp = stamp
+        t.header.frame_id = 'odom'
+        t.child_frame_id = 'base_link'
+        t.transform.translation.x = self.latest_pose['x']
+        t.transform.translation.y = self.latest_pose['y']
+        t.transform.translation.z = self.latest_pose['z']
+        t.transform.rotation.x = self.latest_pose['qx']
+        t.transform.rotation.y = self.latest_pose['qy']
+        t.transform.rotation.z = self.latest_pose['qz']
+        t.transform.rotation.w = self.latest_pose['qw']
+        self.tf_broadcaster.sendTransform(t)
+
         odom_base = Odometry()
-        odom_base.header.stamp = t.header.stamp
+        odom_base.header.stamp = stamp
         odom_base.header.frame_id = 'odom'
         odom_base.child_frame_id = 'base_link'
-        
-        odom_base.pose.pose.position.x = t_ob[0]
-        odom_base.pose.pose.position.y = t_ob[1]
-        odom_base.pose.pose.position.z = t_ob[2]
-        odom_base.pose.pose.orientation.x = q_ob[0]
-        odom_base.pose.pose.orientation.y = q_ob[1]
-        odom_base.pose.pose.orientation.z = q_ob[2]
-        odom_base.pose.pose.orientation.w = q_ob[3]
-        
-        odom_base.twist.twist.linear.x = v_b[0]
-        odom_base.twist.twist.linear.y = v_b[1]
-        odom_base.twist.twist.linear.z = v_b[2]
-        odom_base.twist.twist.angular.x = w_b[0]
-        odom_base.twist.twist.angular.y = w_b[1]
-        odom_base.twist.twist.angular.z = w_b[2]
+
+        odom_base.pose.pose.position.x = self.latest_pose['x']
+        odom_base.pose.pose.position.y = self.latest_pose['y']
+        odom_base.pose.pose.position.z = self.latest_pose['z']
+        odom_base.pose.pose.orientation.x = self.latest_pose['qx']
+        odom_base.pose.pose.orientation.y = self.latest_pose['qy']
+        odom_base.pose.pose.orientation.z = self.latest_pose['qz']
+        odom_base.pose.pose.orientation.w = self.latest_pose['qw']
+
+        odom_base.twist.twist.linear.x = self.latest_twist['vx']
+        odom_base.twist.twist.linear.y = self.latest_twist['vy']
+        odom_base.twist.twist.linear.z = self.latest_twist['vz']
+        odom_base.twist.twist.angular.x = self.latest_twist['wx']
+        odom_base.twist.twist.angular.y = self.latest_twist['wy']
+        odom_base.twist.twist.angular.z = self.latest_twist['wz']
 
         self.odom_pub.publish(odom_base)
 

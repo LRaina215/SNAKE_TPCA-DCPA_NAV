@@ -27,7 +27,7 @@ def generate_launch_description():
             parameters=[{
                 'use_sim_time': LaunchConfiguration('use_sim_time'),
                 'target_frame': LaunchConfiguration('target_frame'),
-                'transform_tolerance': 0.2,
+                'transform_tolerance': 0.5,
                 'min_height': 0.05,
                 'max_height': 1.0,
                 'angle_min': -3.14159,  # -M_PI/2 PHASE1

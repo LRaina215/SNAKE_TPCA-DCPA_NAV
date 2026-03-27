@@ -18,8 +18,7 @@ IcpNode::IcpNode(const rclcpp::NodeOptions &options)
     : Node("icp_registration", options), rough_iter_(10), refine_iter_(5),
       first_scan_(true) {
   is_ready_ = false;
-  cloud_in_ =
-      pcl::PointCloud<pcl::PointXYZI>::Ptr(new pcl::PointCloud<pcl::PointXYZI>);
+  cloud_in_ = PointCloudXYZ::Ptr(new PointCloudXYZ);
   // this->declare_parameter("use_sim_time", false);
   double rough_leaf_size = this->declare_parameter("rough_leaf_size", 0.4);
   double refine_leaf_size = this->declare_parameter("refine_leaf_size", 0.1);
@@ -35,18 +34,15 @@ IcpNode::IcpNode(const rclcpp::NodeOptions &options)
   }
   // Read the pcd file
   pcl::PCDReader reader;
-  pcl::PointCloud<pcl::PointXYZI>::Ptr cloud(
-      new pcl::PointCloud<pcl::PointXYZI>);
+  PointCloudXYZ::Ptr cloud(new PointCloudXYZ);
   reader.read(pcd_path_, *cloud);
   voxel_refine_filter_.setInputCloud(cloud);
   voxel_refine_filter_.filter(*cloud);
 
   // Add normal to the pointcloud
   refine_map_ = addNorm(cloud);
-  pcl::PointCloud<pcl::PointXYZI>::Ptr point_rough(
-      new pcl::PointCloud<pcl::PointXYZI>);
-  pcl::PointCloud<pcl::PointXYZI>::Ptr filterd_point_rough(
-      new pcl::PointCloud<pcl::PointXYZI>);
+  PointCloudXYZ::Ptr point_rough(new PointCloudXYZ);
+  PointCloudXYZ::Ptr filterd_point_rough(new PointCloudXYZ);
   pcl::copyPointCloud(*refine_map_, *point_rough);
   voxel_rough_filter_.setInputCloud(point_rough);
   voxel_rough_filter_.filter(*filterd_point_rough);
@@ -159,7 +155,9 @@ IcpNode::~IcpNode() {
 
 void IcpNode::pointcloudCallback(
     const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
-  pcl::fromROSMsg(*msg, *cloud_in_);
+  PointCloudXYZ incoming_cloud;
+  pcl::fromROSMsg(*msg, incoming_cloud);
+  *cloud_in_ = incoming_cloud;
   if (first_scan_ || !is_ready_) {
     auto pose_msg =
         std::make_shared<geometry_msgs::msg::PoseWithCovarianceStamped>();
@@ -203,8 +201,8 @@ void IcpNode::initialPoseCallback(
   try {
     // Get odom to laser transform
     auto transform =
-        tf_buffer_->lookupTransform(laser_frame_id_, odom_frame_id_, now(),
-                                    rclcpp::Duration::from_seconds(10));
+        tf_buffer_->lookupTransform(laser_frame_id_, odom_frame_id_,
+                                    tf2::TimePointZero);
     // RCLCPP_INFO(get_logger(), "%s", transform.header.frame_id.c_str());
     Eigen::Vector3d t(transform.transform.translation.x,
                       transform.transform.translation.y,
@@ -283,7 +281,7 @@ void IcpNode::initialPoseCallback(
 //   return icp_refine_.getFinalTransformation().cast<double>();
 // }
 
-Eigen::Matrix4d IcpNode::multiAlignSync(PointCloudXYZI::Ptr source,
+Eigen::Matrix4d IcpNode::multiAlignSync(PointCloudXYZ::Ptr source,
                                         const Eigen::Matrix4d &init_guess) {
   static auto rotate2rpy = [](Eigen::Matrix3d &rot) -> Eigen::Vector3d {
     double roll = std::atan2(rot(2, 1), rot(2, 2));
@@ -323,19 +321,17 @@ Eigen::Matrix4d IcpNode::multiAlignSync(PointCloudXYZI::Ptr source,
       }
     }
   }
-  pcl::PointCloud<pcl::PointXYZI>::Ptr rough_source(
-      new pcl::PointCloud<pcl::PointXYZI>);
-  pcl::PointCloud<pcl::PointXYZI>::Ptr refine_source(
-      new pcl::PointCloud<pcl::PointXYZI>);
+  PointCloudXYZ::Ptr rough_source(new PointCloudXYZ);
+  PointCloudXYZ::Ptr refine_source(new PointCloudXYZ);
 
   voxel_rough_filter_.setInputCloud(source);
   voxel_rough_filter_.filter(*rough_source);
   voxel_refine_filter_.setInputCloud(source);
   voxel_refine_filter_.filter(*refine_source);
 
-  PointCloudXYZIN::Ptr rough_source_norm = addNorm(rough_source);
-  PointCloudXYZIN::Ptr refine_source_norm = addNorm(refine_source);
-  PointCloudXYZIN::Ptr align_point(new PointCloudXYZIN);
+  PointCloudXYZN::Ptr rough_source_norm = addNorm(rough_source);
+  PointCloudXYZN::Ptr refine_source_norm = addNorm(refine_source);
+  PointCloudXYZN::Ptr align_point(new PointCloudXYZN);
 
   Eigen::Matrix4f best_rough_transform;
   double best_rough_score = 10.0;
@@ -376,19 +372,19 @@ Eigen::Matrix4d IcpNode::multiAlignSync(PointCloudXYZI::Ptr source,
   return icp_refine_.getFinalTransformation().cast<double>();
 }
 
-PointCloudXYZIN::Ptr
-IcpNode::addNorm(pcl::PointCloud<pcl::PointXYZI>::Ptr cloud) {
+PointCloudXYZN::Ptr
+IcpNode::addNorm(PointCloudXYZ::Ptr cloud) {
   pcl::PointCloud<pcl::Normal>::Ptr normals(new pcl::PointCloud<pcl::Normal>);
-  pcl::search::KdTree<pcl::PointXYZI>::Ptr searchTree(
-      new pcl::search::KdTree<pcl::PointXYZI>);
+  pcl::search::KdTree<pcl::PointXYZ>::Ptr searchTree(
+      new pcl::search::KdTree<pcl::PointXYZ>);
   searchTree->setInputCloud(cloud);
 
-  pcl::NormalEstimation<pcl::PointXYZI, pcl::Normal> normalEstimator;
+  pcl::NormalEstimation<pcl::PointXYZ, pcl::Normal> normalEstimator;
   normalEstimator.setInputCloud(cloud);
   normalEstimator.setSearchMethod(searchTree);
   normalEstimator.setKSearch(15);
   normalEstimator.compute(*normals);
-  PointCloudXYZIN::Ptr out(new PointCloudXYZIN);
+  PointCloudXYZN::Ptr out(new PointCloudXYZN);
   pcl::concatenateFields(*cloud, *normals, *out);
   return out;
 }

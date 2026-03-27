@@ -24,9 +24,9 @@
 #include <pcl/impl/point_types.hpp>
 
 namespace icp {
-using PointType = pcl::PointXYZINormal;
-using PointCloudXYZI = pcl::PointCloud<pcl::PointXYZI>;
-using PointCloudXYZIN = pcl::PointCloud<pcl::PointXYZINormal>;
+using PointType = pcl::PointNormal;
+using PointCloudXYZ = pcl::PointCloud<pcl::PointXYZ>;
+using PointCloudXYZN = pcl::PointCloud<pcl::PointNormal>;
 
 // Get initial map to odom pose estimation using ICP algorithm
 class IcpNode : public rclcpp::Node {
@@ -38,12 +38,12 @@ private:
   void initialPoseCallback(
       const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg);
 
-  static PointCloudXYZIN::Ptr addNorm(PointCloudXYZI::Ptr cloud);
+  static PointCloudXYZN::Ptr addNorm(PointCloudXYZ::Ptr cloud);
 
-  // Eigen::Matrix4d align(PointCloudXYZI::Ptr source,
+  // Eigen::Matrix4d align(PointCloudXYZ::Ptr source,
   //                       const Eigen::Matrix4d &init_guess);
 
-  Eigen::Matrix4d multiAlignSync(PointCloudXYZI::Ptr source,
+  Eigen::Matrix4d multiAlignSync(PointCloudXYZ::Ptr source,
                                  const Eigen::Matrix4d &init_guess);
 
   // ROS2 part
@@ -60,8 +60,8 @@ private:
   std::unique_ptr<std::thread> tf_publisher_thread_;
 
   // Voxelfilter used to downsample the pointcloud
-  pcl::VoxelGrid<pcl::PointXYZI> voxel_rough_filter_;
-  pcl::VoxelGrid<pcl::PointXYZI> voxel_refine_filter_;
+  pcl::VoxelGrid<pcl::PointXYZ> voxel_rough_filter_;
+  pcl::VoxelGrid<pcl::PointXYZ> voxel_refine_filter_;
 
   // ICP
   int rough_iter_;
@@ -70,9 +70,9 @@ private:
   pcl::IterativeClosestPointWithNormals<PointType, PointType> icp_refine_;
 
   // Store
-  PointCloudXYZI::Ptr cloud_in_;
-  PointCloudXYZIN::Ptr refine_map_;
-  PointCloudXYZIN::Ptr rough_map_;
+  PointCloudXYZ::Ptr cloud_in_;
+  PointCloudXYZN::Ptr refine_map_;
+  PointCloudXYZN::Ptr rough_map_;
   geometry_msgs::msg::TransformStamped map_to_odom_;
   std::filesystem::path pcd_path_;
   std::string map_frame_id_, odom_frame_id_, laser_frame_id_;

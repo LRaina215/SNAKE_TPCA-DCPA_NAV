@@ -21,6 +21,7 @@ export RCUTILS_LOGGING_BUFFERED_STREAM=1
 tabs=(
   "Sim|ros2 launch tcpa_sim_env sim_launch.py"
   "Point-LIO|ros2 launch point_lio mapping_mid360.launch.py use_sim_time:=True rviz:=false"
+  "OdomTF|python3 ${SCRIPT_DIR}/rm_navi/rm_navigation/navi/launch/odom_to_base_node.py --ros-args -p use_sim_time:=true"
   "Segmentation|ros2 launch linefit_ground_segmentation_ros segmentation.launch.py"
   "Tracker|ros2 launch predictive_tracker dynamic_tracker.launch.py use_sim_time:=True"
   "Scan|ros2 launch pointcloud_to_laserscan pointcloud_to_laserscan_launch.py use_sim_time:=True target_frame:=base_link"

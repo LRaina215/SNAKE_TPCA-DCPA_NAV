@@ -59,6 +59,9 @@ def generate_launch_description():
         name='laserMapping',
         output='screen',
         parameters=laser_mapping_params,
+        remappings=[
+            ('odom', '/odom_livox'),
+        ],
         # prefix='gdb -ex run --args'
     )
 
