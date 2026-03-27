@@ -15,8 +15,8 @@ def generate_launch_description():
             output='screen',
             parameters=[params_file],
             remappings=[
-                ('cloud_in', '/cloud_registered'),
-                ('input_topic', '/cloud_registered'),
+                ('cloud_in', '/cloud_registered_body'),
+                ('input_topic', '/cloud_registered_body'),
                 ('obstacles', '/segmentation/obstacle'),
                 ('ground', '/segmentation/ground')
             ]

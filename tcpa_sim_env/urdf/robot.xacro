@@ -118,12 +118,12 @@
     <plugin name="tcpa_planar_move" filename="libgazebo_ros_planar_move.so">
       <ros>
         <remapping>cmd_vel:=/cmd_vel</remapping>
-        <remapping>odom:=/gazebo_odom</remapping>
+        <remapping>odom:=/odom</remapping>
       </ros>
       <update_rate>100.0</update_rate>
       <publish_rate>50.0</publish_rate>
       <publish_odom>true</publish_odom>
-      <publish_odom_tf>false</publish_odom_tf>
+      <publish_odom_tf>true</publish_odom_tf>
       <odometry_frame>odom</odometry_frame>
       <robot_base_frame>base_link</robot_base_frame>
       <covariance_x>0.01</covariance_x>
