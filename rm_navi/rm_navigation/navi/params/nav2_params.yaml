@@ -169,10 +169,10 @@ controller_server:
       # GoalAlign.scale: 24.0
       GoalAlign.scale: 0.0
       GoalAlign.forward_point_distance: 0.1
-      PathDist.scale: 28.0
+      PathDist.scale: 32.0 # 消融实验
       GoalDist.scale: 16.0
       TCPADCPA.plugin: "tcpa_dcpa_critic::TCPADCPACritic"
-      TCPADCPA.scale: 5.0
+      TCPADCPA.scale: 0.0 # 消融实验
       TCPADCPA.tau_safe: 1.0
       TCPADCPA.sigma_safe: 0.6
       TCPADCPA.tracked_topic: "/tracked_obstacles"
