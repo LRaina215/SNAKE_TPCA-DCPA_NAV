@@ -47,6 +47,8 @@ struct Track
   Eigen::Matrix4d covariance{Eigen::Matrix4d::Identity()};
   double z{0.0};
   rclcpp::Time last_update_stamp{0, 0, RCL_ROS_TIME};
+  int hit_frames{0};
+  int dynamic_hit_frames{0};
   int missed_frames{0};
 };
 
@@ -77,6 +79,9 @@ public:
     process_noise_accel_ = declare_parameter<double>("process_noise_accel", 2.0);
     voxel_leaf_size_ = declare_parameter<double>("voxel_leaf_size", 0.1);
     measurement_noise_position_ = declare_parameter<double>("measurement_noise_position", 0.08);
+    min_confirmed_hits_ = declare_parameter<int>("min_confirmed_hits", 3);
+    min_dynamic_hits_ = declare_parameter<int>("min_dynamic_hits", 2);
+    dynamic_speed_threshold_ = declare_parameter<double>("dynamic_speed_threshold", 0.20);
     velocity_arrow_scale_ = declare_parameter<double>("velocity_arrow_scale", 0.5);
     input_timeout_sec_ = declare_parameter<double>("input_timeout_sec", 1.0);
 
@@ -246,6 +251,7 @@ private:
     for (auto & item : tracks_) {
       if (matched_tracks.find(item.first) == matched_tracks.end()) {
         item.second.missed_frames += 1;
+        item.second.dynamic_hit_frames = 0;
       }
     }
 
@@ -315,6 +321,8 @@ private:
     track.covariance(3, 3) = 5.0;
     track.z = detection.z;
     track.last_update_stamp = current_stamp;
+    track.hit_frames = 1;
+    track.dynamic_hit_frames = 0;
     track.missed_frames = 0;
     tracks_.emplace(track.id, track);
   }
@@ -371,7 +379,15 @@ private:
       (Eigen::Matrix4d::Identity() - kalman_gain * measurement_matrix) * track.covariance;
     track.z = detection.z;
     track.last_update_stamp = current_stamp;
+    track.hit_frames += 1;
     track.missed_frames = 0;
+
+    const double speed = std::hypot(track.state(2), track.state(3));
+    if (speed >= dynamic_speed_threshold_) {
+      track.dynamic_hit_frames += 1;
+    } else {
+      track.dynamic_hit_frames = 0;
+    }
   }
 
   void publishTrackedObstacles(const std_msgs::msg::Header & header)
@@ -389,6 +405,10 @@ private:
     tracked_array.obstacles.reserve(ordered_ids.size());
     for (const int track_id : ordered_ids) {
       const auto & track = tracks_.at(track_id);
+      if (!shouldPublishTrack(track)) {
+        continue;
+      }
+
       predictive_navigation_msgs::msg::TrackedObstacle obstacle;
       obstacle.id = track.id;
       obstacle.position.x = track.state(0);
@@ -427,6 +447,24 @@ private:
 
     previous_marker_ids_ = active_ids;
     marker_pub_->publish(marker_array);
+  }
+
+  bool shouldPublishTrack(const Track & track) const
+  {
+    if (track.missed_frames != 0) {
+      return false;
+    }
+
+    if (track.hit_frames < min_confirmed_hits_) {
+      return false;
+    }
+
+    if (track.dynamic_hit_frames < min_dynamic_hits_) {
+      return false;
+    }
+
+    const double speed = std::hypot(track.state(2), track.state(3));
+    return speed >= dynamic_speed_threshold_;
   }
 
   visualization_msgs::msg::Marker makeSphereMarker(
@@ -528,6 +566,9 @@ private:
   double process_noise_accel_{2.0};
   double voxel_leaf_size_{0.1};
   double measurement_noise_position_{0.08};
+  int min_confirmed_hits_{3};
+  int min_dynamic_hits_{2};
+  double dynamic_speed_threshold_{0.20};
   double velocity_arrow_scale_{0.5};
   double input_timeout_sec_{1.0};
   int next_track_id_{0};

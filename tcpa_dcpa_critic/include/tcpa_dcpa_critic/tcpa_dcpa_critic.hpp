@@ -34,13 +34,17 @@ private:
   void trackedObstaclesCallback(
     const predictive_navigation_msgs::msg::TrackedObstacleArray::SharedPtr msg);
   std::vector<predictive_navigation_msgs::msg::TrackedObstacle> getObstaclesSnapshot() const;
+  bool obstaclesAreFresh() const;
 
   mutable std::mutex obstacles_mutex_;
   std::vector<predictive_navigation_msgs::msg::TrackedObstacle> latest_obstacles_;
+  rclcpp::Time latest_obstacles_stamp_{0, 0, RCL_ROS_TIME};
   rclcpp::Subscription<predictive_navigation_msgs::msg::TrackedObstacleArray>::SharedPtr tracked_obstacles_sub_;
 
   double tau_safe_{2.0};
   double sigma_safe_{0.5};
+  double max_obstacle_age_{0.5};
+  double min_obstacle_speed_{0.05};
   std::string tracked_topic_{"/tracked_obstacles"};
 };
 

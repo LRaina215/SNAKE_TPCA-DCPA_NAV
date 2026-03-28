@@ -176,6 +176,8 @@ controller_server:
       TCPADCPA.tau_safe: 1.0
       TCPADCPA.sigma_safe: 0.6
       TCPADCPA.tracked_topic: "/tracked_obstacles"
+      TCPADCPA.max_obstacle_age: 0.5
+      TCPADCPA.min_obstacle_speed: 0.05
       RotateToGoal.scale: 0.0
       RotateToGoal.slowing_factor: 5.0
       RotateToGoal.lookahead_time: -1.0

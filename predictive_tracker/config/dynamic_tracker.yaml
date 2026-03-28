@@ -13,5 +13,8 @@ predictive_tracker:
     max_missed_frames: 5
     process_noise_accel: 2.0
     measurement_noise_position: 0.08
+    min_confirmed_hits: 3
+    min_dynamic_hits: 2
+    dynamic_speed_threshold: 0.20
     velocity_arrow_scale: 0.5
     input_timeout_sec: 1.0
