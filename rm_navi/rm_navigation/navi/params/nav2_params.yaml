@@ -178,6 +178,12 @@ controller_server:
       TCPADCPA.tracked_topic: "/tracked_obstacles"
       TCPADCPA.max_obstacle_age: 0.5
       TCPADCPA.min_obstacle_speed: 0.05
+      TCPADCPA.hesitation_speed_threshold: 1.0
+      TCPADCPA.hesitation_penalty_scale: 2.0
+      TCPADCPA.urgency_tcpa_threshold: 0.8
+      TCPADCPA.urgency_dcpa_threshold: 1.0
+      TCPADCPA.direction_flip_penalty_scale: 1.0
+      TCPADCPA.direction_flip_speed_threshold: 0.2
       RotateToGoal.scale: 0.0
       RotateToGoal.slowing_factor: 5.0
       RotateToGoal.lookahead_time: -1.0

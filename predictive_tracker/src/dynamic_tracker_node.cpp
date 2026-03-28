@@ -50,6 +50,7 @@ struct Track
   int hit_frames{0};
   int dynamic_hit_frames{0};
   int missed_frames{0};
+  bool dynamic_confirmed{false};
 };
 
 struct Assignment
@@ -82,6 +83,9 @@ public:
     min_confirmed_hits_ = declare_parameter<int>("min_confirmed_hits", 3);
     min_dynamic_hits_ = declare_parameter<int>("min_dynamic_hits", 2);
     dynamic_speed_threshold_ = declare_parameter<double>("dynamic_speed_threshold", 0.20);
+    publish_rate_hz_ = declare_parameter<double>("publish_rate_hz", 20.0);
+    publish_prediction_missed_frames_ =
+      declare_parameter<int>("publish_prediction_missed_frames", 2);
     velocity_arrow_scale_ = declare_parameter<double>("velocity_arrow_scale", 0.5);
     input_timeout_sec_ = declare_parameter<double>("input_timeout_sec", 1.0);
 
@@ -99,6 +103,12 @@ public:
       std::chrono::milliseconds(100),
       std::bind(&DynamicTrackerNode::watchdogCallback, this));
 
+    const double clamped_publish_rate_hz = std::max(1.0, publish_rate_hz_);
+    publish_timer_ = create_wall_timer(
+      std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::duration<double>(1.0 / clamped_publish_rate_hz)),
+      std::bind(&DynamicTrackerNode::publishTimerCallback, this));
+
     RCLCPP_INFO(get_logger(), "Dynamic tracker listening on %s", input_topic_.c_str());
   }
 
@@ -106,7 +116,6 @@ private:
   void pointCloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
   {
     last_input_receive_time_ = get_clock()->now();
-    last_output_header_ = msg->header;
     input_received_once_ = true;
     stale_timeout_handled_ = false;
 
@@ -149,8 +158,24 @@ private:
     }
 
     std::vector<Detection> detections = extractDetections(cloud_xyz, cloud_flat);
+    last_output_header_ = transformed_cloud_msg.header;
     updateTracks(detections, rclcpp::Time(transformed_cloud_msg.header.stamp));
     publishTrackedObstacles(transformed_cloud_msg.header);
+  }
+
+  void publishTimerCallback()
+  {
+    if (!input_received_once_ || stale_timeout_handled_) {
+      return;
+    }
+
+    std_msgs::msg::Header header = lastOutputHeaderAt(get_clock()->now());
+    if (tracks_.empty() && previous_marker_ids_.empty()) {
+      return;
+    }
+
+    predictTracksToStamp(rclcpp::Time(header.stamp));
+    publishTrackedObstacles(header);
   }
 
   void watchdogCallback()
@@ -324,7 +349,15 @@ private:
     track.hit_frames = 1;
     track.dynamic_hit_frames = 0;
     track.missed_frames = 0;
+    track.dynamic_confirmed = false;
     tracks_.emplace(track.id, track);
+  }
+
+  void predictTracksToStamp(const rclcpp::Time & current_stamp)
+  {
+    for (auto & item : tracks_) {
+      predictTrack(item.second, current_stamp);
+    }
   }
 
   void predictTrack(Track & track, const rclcpp::Time & current_stamp) const
@@ -385,9 +418,23 @@ private:
     const double speed = std::hypot(track.state(2), track.state(3));
     if (speed >= dynamic_speed_threshold_) {
       track.dynamic_hit_frames += 1;
+      if (track.dynamic_hit_frames >= min_dynamic_hits_) {
+        track.dynamic_confirmed = true;
+      }
     } else {
       track.dynamic_hit_frames = 0;
+      track.dynamic_confirmed = false;
     }
+  }
+
+  std_msgs::msg::Header lastOutputHeaderAt(const rclcpp::Time & stamp) const
+  {
+    std_msgs::msg::Header header = last_output_header_;
+    header.stamp = stamp;
+    if (header.frame_id.empty()) {
+      header.frame_id = target_frame_;
+    }
+    return header;
   }
 
   void publishTrackedObstacles(const std_msgs::msg::Header & header)
@@ -451,15 +498,15 @@ private:
 
   bool shouldPublishTrack(const Track & track) const
   {
-    if (track.missed_frames != 0) {
-      return false;
-    }
-
     if (track.hit_frames < min_confirmed_hits_) {
       return false;
     }
 
-    if (track.dynamic_hit_frames < min_dynamic_hits_) {
+    if (!track.dynamic_confirmed) {
+      return false;
+    }
+
+    if (track.missed_frames > publish_prediction_missed_frames_) {
       return false;
     }
 
@@ -569,6 +616,8 @@ private:
   int min_confirmed_hits_{3};
   int min_dynamic_hits_{2};
   double dynamic_speed_threshold_{0.20};
+  double publish_rate_hz_{20.0};
+  int publish_prediction_missed_frames_{2};
   double velocity_arrow_scale_{0.5};
   double input_timeout_sec_{1.0};
   int next_track_id_{0};
@@ -583,6 +632,7 @@ private:
   rclcpp::Publisher<predictive_navigation_msgs::msg::TrackedObstacleArray>::SharedPtr tracked_pub_;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr marker_pub_;
   rclcpp::TimerBase::SharedPtr watchdog_timer_;
+  rclcpp::TimerBase::SharedPtr publish_timer_;
   std::unordered_map<int, Track> tracks_;
   std::unordered_set<int> previous_marker_ids_;
 };

@@ -28,12 +28,30 @@ void TCPADCPACritic::onInit()
     node, critic_ns + ".max_obstacle_age", rclcpp::ParameterValue(0.5));
   nav2_util::declare_parameter_if_not_declared(
     node, critic_ns + ".min_obstacle_speed", rclcpp::ParameterValue(0.05));
+  nav2_util::declare_parameter_if_not_declared(
+    node, critic_ns + ".hesitation_speed_threshold", rclcpp::ParameterValue(0.75));
+  nav2_util::declare_parameter_if_not_declared(
+    node, critic_ns + ".hesitation_penalty_scale", rclcpp::ParameterValue(1.5));
+  nav2_util::declare_parameter_if_not_declared(
+    node, critic_ns + ".urgency_tcpa_threshold", rclcpp::ParameterValue(0.8));
+  nav2_util::declare_parameter_if_not_declared(
+    node, critic_ns + ".urgency_dcpa_threshold", rclcpp::ParameterValue(0.9));
+  nav2_util::declare_parameter_if_not_declared(
+    node, critic_ns + ".direction_flip_penalty_scale", rclcpp::ParameterValue(0.8));
+  nav2_util::declare_parameter_if_not_declared(
+    node, critic_ns + ".direction_flip_speed_threshold", rclcpp::ParameterValue(0.2));
 
   node->get_parameter(critic_ns + ".tau_safe", tau_safe_);
   node->get_parameter(critic_ns + ".sigma_safe", sigma_safe_);
   node->get_parameter(critic_ns + ".tracked_topic", tracked_topic_);
   node->get_parameter(critic_ns + ".max_obstacle_age", max_obstacle_age_);
   node->get_parameter(critic_ns + ".min_obstacle_speed", min_obstacle_speed_);
+  node->get_parameter(critic_ns + ".hesitation_speed_threshold", hesitation_speed_threshold_);
+  node->get_parameter(critic_ns + ".hesitation_penalty_scale", hesitation_penalty_scale_);
+  node->get_parameter(critic_ns + ".urgency_tcpa_threshold", urgency_tcpa_threshold_);
+  node->get_parameter(critic_ns + ".urgency_dcpa_threshold", urgency_dcpa_threshold_);
+  node->get_parameter(critic_ns + ".direction_flip_penalty_scale", direction_flip_penalty_scale_);
+  node->get_parameter(critic_ns + ".direction_flip_speed_threshold", direction_flip_speed_threshold_);
 
   if (tau_safe_ <= 0.0) {
     RCLCPP_WARN(
@@ -55,6 +73,12 @@ void TCPADCPACritic::onInit()
       node->get_logger(), "%s.min_obstacle_speed must be non-negative. Clamping to 0.0.", critic_ns.c_str());
     min_obstacle_speed_ = 0.0;
   }
+  hesitation_speed_threshold_ = std::max(0.0, hesitation_speed_threshold_);
+  hesitation_penalty_scale_ = std::max(0.0, hesitation_penalty_scale_);
+  urgency_tcpa_threshold_ = std::max(0.0, urgency_tcpa_threshold_);
+  urgency_dcpa_threshold_ = std::max(0.0, urgency_dcpa_threshold_);
+  direction_flip_penalty_scale_ = std::max(0.0, direction_flip_penalty_scale_);
+  direction_flip_speed_threshold_ = std::max(0.0, direction_flip_speed_threshold_);
 
   tracked_obstacles_sub_ = node->create_subscription<predictive_navigation_msgs::msg::TrackedObstacleArray>(
     tracked_topic_, rclcpp::SystemDefaultsQoS(),
@@ -63,10 +87,12 @@ void TCPADCPACritic::onInit()
 
 bool TCPADCPACritic::prepare(
   const geometry_msgs::msg::Pose2D &,
-  const nav_2d_msgs::msg::Twist2D &,
+  const nav_2d_msgs::msg::Twist2D & vel,
   const geometry_msgs::msg::Pose2D &,
   const nav_2d_msgs::msg::Path2D &)
 {
+  current_velocity_x_ = vel.x;
+  current_velocity_y_ = vel.y;
   return true;
 }
 
@@ -112,9 +138,33 @@ double TCPADCPACritic::scoreTrajectory(const dwb_msgs::msg::Trajectory2D & traj)
     const double dcpa_y = rel_py - (tcpa * rel_vy);
     const double dcpa_sq = (dcpa_x * dcpa_x) + (dcpa_y * dcpa_y);
 
+    const double dcpa = std::sqrt(dcpa_sq);
     const double temporal_term = std::exp(-tcpa / tau_safe_);
     const double spatial_term = std::exp(-dcpa_sq / (2.0 * sigma_safe_sq));
-    total_cost += temporal_term * spatial_term;
+    const double risk_term = temporal_term * spatial_term;
+    total_cost += risk_term;
+
+    const bool urgent_interaction =
+      (tcpa <= urgency_tcpa_threshold_) && (dcpa <= urgency_dcpa_threshold_);
+    if (!urgent_interaction) {
+      continue;
+    }
+
+    const double traj_speed = std::hypot(robot_vx, robot_vy);
+    if (traj_speed < hesitation_speed_threshold_ && hesitation_speed_threshold_ > 1e-9) {
+      const double speed_deficit = 1.0 - (traj_speed / hesitation_speed_threshold_);
+      total_cost += hesitation_penalty_scale_ * risk_term * speed_deficit;
+    }
+
+    const double current_speed = std::hypot(current_velocity_x_, current_velocity_y_);
+    if (traj_speed > 1e-9 && current_speed > direction_flip_speed_threshold_) {
+      const double normalized_dot =
+        ((robot_vx * current_velocity_x_) + (robot_vy * current_velocity_y_)) /
+        (traj_speed * current_speed);
+      if (normalized_dot < 0.0) {
+        total_cost += direction_flip_penalty_scale_ * risk_term * (-normalized_dot);
+      }
+    }
   }
 
   return total_cost * scale_;
@@ -125,6 +175,8 @@ void TCPADCPACritic::reset()
   std::lock_guard<std::mutex> lock(obstacles_mutex_);
   latest_obstacles_.clear();
   latest_obstacles_stamp_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
+  current_velocity_x_ = 0.0;
+  current_velocity_y_ = 0.0;
 }
 
 void TCPADCPACritic::trackedObstaclesCallback(

@@ -45,6 +45,14 @@ private:
   double sigma_safe_{0.5};
   double max_obstacle_age_{0.5};
   double min_obstacle_speed_{0.05};
+  double hesitation_speed_threshold_{0.75};
+  double hesitation_penalty_scale_{1.5};
+  double urgency_tcpa_threshold_{0.8};
+  double urgency_dcpa_threshold_{0.9};
+  double direction_flip_penalty_scale_{0.8};
+  double direction_flip_speed_threshold_{0.2};
+  double current_velocity_x_{0.0};
+  double current_velocity_y_{0.0};
   std::string tracked_topic_{"/tracked_obstacles"};
 };
 
