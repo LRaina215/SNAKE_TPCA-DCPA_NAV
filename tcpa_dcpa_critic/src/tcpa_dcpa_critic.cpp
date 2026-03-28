@@ -37,6 +37,16 @@ void TCPADCPACritic::onInit()
   nav2_util::declare_parameter_if_not_declared(
     node, critic_ns + ".urgency_dcpa_threshold", rclcpp::ParameterValue(0.9));
   nav2_util::declare_parameter_if_not_declared(
+    node, critic_ns + ".lateral_escape_penalty_scale", rclcpp::ParameterValue(2.0));
+  nav2_util::declare_parameter_if_not_declared(
+    node, critic_ns + ".lateral_escape_speed_threshold", rclcpp::ParameterValue(0.8));
+  nav2_util::declare_parameter_if_not_declared(
+    node, critic_ns + ".lateral_escape_ratio", rclcpp::ParameterValue(1.2));
+  nav2_util::declare_parameter_if_not_declared(
+    node, critic_ns + ".goal_progress_penalty_scale", rclcpp::ParameterValue(1.2));
+  nav2_util::declare_parameter_if_not_declared(
+    node, critic_ns + ".goal_progress_speed_threshold", rclcpp::ParameterValue(0.8));
+  nav2_util::declare_parameter_if_not_declared(
     node, critic_ns + ".direction_flip_penalty_scale", rclcpp::ParameterValue(0.8));
   nav2_util::declare_parameter_if_not_declared(
     node, critic_ns + ".direction_flip_speed_threshold", rclcpp::ParameterValue(0.2));
@@ -50,6 +60,11 @@ void TCPADCPACritic::onInit()
   node->get_parameter(critic_ns + ".hesitation_penalty_scale", hesitation_penalty_scale_);
   node->get_parameter(critic_ns + ".urgency_tcpa_threshold", urgency_tcpa_threshold_);
   node->get_parameter(critic_ns + ".urgency_dcpa_threshold", urgency_dcpa_threshold_);
+  node->get_parameter(critic_ns + ".lateral_escape_penalty_scale", lateral_escape_penalty_scale_);
+  node->get_parameter(critic_ns + ".lateral_escape_speed_threshold", lateral_escape_speed_threshold_);
+  node->get_parameter(critic_ns + ".lateral_escape_ratio", lateral_escape_ratio_);
+  node->get_parameter(critic_ns + ".goal_progress_penalty_scale", goal_progress_penalty_scale_);
+  node->get_parameter(critic_ns + ".goal_progress_speed_threshold", goal_progress_speed_threshold_);
   node->get_parameter(critic_ns + ".direction_flip_penalty_scale", direction_flip_penalty_scale_);
   node->get_parameter(critic_ns + ".direction_flip_speed_threshold", direction_flip_speed_threshold_);
 
@@ -77,6 +92,11 @@ void TCPADCPACritic::onInit()
   hesitation_penalty_scale_ = std::max(0.0, hesitation_penalty_scale_);
   urgency_tcpa_threshold_ = std::max(0.0, urgency_tcpa_threshold_);
   urgency_dcpa_threshold_ = std::max(0.0, urgency_dcpa_threshold_);
+  lateral_escape_penalty_scale_ = std::max(0.0, lateral_escape_penalty_scale_);
+  lateral_escape_speed_threshold_ = std::max(0.0, lateral_escape_speed_threshold_);
+  lateral_escape_ratio_ = std::max(1.0, lateral_escape_ratio_);
+  goal_progress_penalty_scale_ = std::max(0.0, goal_progress_penalty_scale_);
+  goal_progress_speed_threshold_ = std::max(0.0, goal_progress_speed_threshold_);
   direction_flip_penalty_scale_ = std::max(0.0, direction_flip_penalty_scale_);
   direction_flip_speed_threshold_ = std::max(0.0, direction_flip_speed_threshold_);
 
@@ -86,13 +106,26 @@ void TCPADCPACritic::onInit()
 }
 
 bool TCPADCPACritic::prepare(
-  const geometry_msgs::msg::Pose2D &,
+  const geometry_msgs::msg::Pose2D & pose,
   const nav_2d_msgs::msg::Twist2D & vel,
-  const geometry_msgs::msg::Pose2D &,
+  const geometry_msgs::msg::Pose2D & goal,
   const nav_2d_msgs::msg::Path2D &)
 {
   current_velocity_x_ = vel.x;
   current_velocity_y_ = vel.y;
+
+  const double goal_dx = goal.x - pose.x;
+  const double goal_dy = goal.y - pose.y;
+  const double goal_distance = std::hypot(goal_dx, goal_dy);
+  if (goal_distance > 1e-6) {
+    goal_direction_x_ = goal_dx / goal_distance;
+    goal_direction_y_ = goal_dy / goal_distance;
+    has_goal_direction_ = true;
+  } else {
+    goal_direction_x_ = 0.0;
+    goal_direction_y_ = 0.0;
+    has_goal_direction_ = false;
+  }
   return true;
 }
 
@@ -156,6 +189,27 @@ double TCPADCPACritic::scoreTrajectory(const dwb_msgs::msg::Trajectory2D & traj)
       total_cost += hesitation_penalty_scale_ * risk_term * speed_deficit;
     }
 
+    const bool laterally_dominant = std::abs(rel_py) > (lateral_escape_ratio_ * std::abs(rel_px));
+    if (laterally_dominant && lateral_escape_speed_threshold_ > 1e-9) {
+      const double side_sign = (rel_py >= 0.0) ? 1.0 : -1.0;
+      const double away_lateral_speed = -side_sign * robot_vy;
+      if (away_lateral_speed < lateral_escape_speed_threshold_) {
+        const double lateral_speed_deficit =
+          (lateral_escape_speed_threshold_ - away_lateral_speed) / lateral_escape_speed_threshold_;
+        total_cost += lateral_escape_penalty_scale_ * risk_term * lateral_speed_deficit;
+      }
+
+      if (has_goal_direction_ && goal_progress_speed_threshold_ > 1e-9) {
+        const double goal_progress_speed =
+          (robot_vx * goal_direction_x_) + (robot_vy * goal_direction_y_);
+        if (goal_progress_speed < goal_progress_speed_threshold_) {
+          const double goal_progress_deficit =
+            (goal_progress_speed_threshold_ - goal_progress_speed) / goal_progress_speed_threshold_;
+          total_cost += goal_progress_penalty_scale_ * risk_term * goal_progress_deficit;
+        }
+      }
+    }
+
     const double current_speed = std::hypot(current_velocity_x_, current_velocity_y_);
     if (traj_speed > 1e-9 && current_speed > direction_flip_speed_threshold_) {
       const double normalized_dot =
@@ -177,6 +231,9 @@ void TCPADCPACritic::reset()
   latest_obstacles_stamp_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
   current_velocity_x_ = 0.0;
   current_velocity_y_ = 0.0;
+  goal_direction_x_ = 0.0;
+  goal_direction_y_ = 0.0;
+  has_goal_direction_ = false;
 }
 
 void TCPADCPACritic::trackedObstaclesCallback(

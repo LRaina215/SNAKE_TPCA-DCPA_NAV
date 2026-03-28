@@ -155,11 +155,11 @@ controller_server:
       # 设大一点（比如 0.25），只要转得不快，就算停稳，立刻切下一个点
       rot_stopped_velocity: 0.05
 
-      short_circuit_trajectory_evaluation: True
+      short_circuit_trajectory_evaluation: False
       stateful: True
       # critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "GoalAlign", "PathAlign", "PathDist", "GoalDist"]
       # 【修改后】删掉 "RotateToGoal"
-      critics: ["Oscillation", "BaseObstacle", "GoalAlign", "PathAlign", "PathDist", "GoalDist", "TCPADCPA"]
+      critics: ["Oscillation", "BaseObstacle", "TCPADCPA", "GoalAlign", "PathAlign", "PathDist", "GoalDist"]
       # BaseObstacle.scale: 0.02
       # 【新增】加大对障碍物的恐惧 (BaseObstacle)
       # 如果它老是往障碍物堆里扎，说明它对碰撞的惩罚不够重视
@@ -169,10 +169,10 @@ controller_server:
       # GoalAlign.scale: 24.0
       GoalAlign.scale: 0.0
       GoalAlign.forward_point_distance: 0.1
-      PathDist.scale: 32.0 # 消融实验
+      PathDist.scale: 28.0
       GoalDist.scale: 16.0
       TCPADCPA.plugin: "tcpa_dcpa_critic::TCPADCPACritic"
-      TCPADCPA.scale: 0.0 # 消融实验
+      TCPADCPA.scale: 10.0
       TCPADCPA.tau_safe: 1.0
       TCPADCPA.sigma_safe: 0.6
       TCPADCPA.tracked_topic: "/tracked_obstacles"
@@ -182,8 +182,13 @@ controller_server:
       TCPADCPA.hesitation_penalty_scale: 2.0
       TCPADCPA.urgency_tcpa_threshold: 0.8
       TCPADCPA.urgency_dcpa_threshold: 1.0
-      TCPADCPA.direction_flip_penalty_scale: 1.0
-      TCPADCPA.direction_flip_speed_threshold: 0.2
+      TCPADCPA.lateral_escape_penalty_scale: 3.5
+      TCPADCPA.lateral_escape_speed_threshold: 1.6
+      TCPADCPA.lateral_escape_ratio: 1.15
+      TCPADCPA.goal_progress_penalty_scale: 1.6
+      TCPADCPA.goal_progress_speed_threshold: 0.9
+      TCPADCPA.direction_flip_penalty_scale: 1.5
+      TCPADCPA.direction_flip_speed_threshold: 0.05
       RotateToGoal.scale: 0.0
       RotateToGoal.slowing_factor: 5.0
       RotateToGoal.lookahead_time: -1.0

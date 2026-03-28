@@ -49,10 +49,18 @@ private:
   double hesitation_penalty_scale_{1.5};
   double urgency_tcpa_threshold_{0.8};
   double urgency_dcpa_threshold_{0.9};
+  double lateral_escape_penalty_scale_{2.0};
+  double lateral_escape_speed_threshold_{0.8};
+  double lateral_escape_ratio_{1.2};
+  double goal_progress_penalty_scale_{1.2};
+  double goal_progress_speed_threshold_{0.8};
   double direction_flip_penalty_scale_{0.8};
   double direction_flip_speed_threshold_{0.2};
   double current_velocity_x_{0.0};
   double current_velocity_y_{0.0};
+  double goal_direction_x_{0.0};
+  double goal_direction_y_{0.0};
+  bool has_goal_direction_{false};
   std::string tracked_topic_{"/tracked_obstacles"};
 };
 
