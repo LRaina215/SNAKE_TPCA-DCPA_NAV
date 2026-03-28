@@ -58,9 +58,9 @@ bt_navigator:
     enable_groot_monitoring: False
     groot_zmq_publisher_port: 1666
     groot_zmq_server_port: 1667
-    default_bt_xml_filename: "/home/robomaster/auto_shao/src/rm_navi/rm_navigation/navi/params/navigate_to_pose_w_replanning_and_recovery.xml"
-    default_nav_to_pose_bt_xml: "/home/robomaster/auto_shao/src/rm_navi/rm_navigation/navi/params/navigate_to_pose_w_replanning_and_recovery.xml"
-    default_nav_through_poses_bt_xml: "/home/robomaster/auto_shao/src/rm_navi/rm_navigation/navi/params/navigate_through_poses_w_replanning_and_recovery.xml"
+    default_bt_xml_filename: "/home/lraina/auto_shao/src/rm_navi/rm_navigation/navi/params/navigate_to_pose_w_replanning_and_recovery.xml"
+    default_nav_to_pose_bt_xml: "/home/lraina/auto_shao/src/rm_navi/rm_navigation/navi/params/navigate_to_pose_w_replanning_and_recovery.xml"
+    default_nav_through_poses_bt_xml: "/home/lraina/auto_shao/src/rm_navi/rm_navigation/navi/params/navigate_through_poses_w_replanning_and_recovery.xml"
     plugin_lib_names:
     - nav2_compute_path_to_pose_action_bt_node
     - nav2_compute_path_through_poses_action_bt_node
@@ -127,22 +127,22 @@ controller_server:
       plugin: "dwb_core::DWBLocalPlanner"
       default_critic_namespaces: ["dwb_critics", "tcpa_dcpa_critic"]
       debug_trajectory_details: True
-      min_vel_x: -1.0
-      min_vel_y: -1.0
-      max_vel_x: 1.8
-      max_vel_y: 1.8
+      min_vel_x: -15.0
+      min_vel_y: -15.0
+      max_vel_x: 15.0
+      max_vel_y: 15.0
       max_vel_theta: 0.0
       min_speed_xy: 0.0
-      max_speed_xy: 2.2
+      max_speed_xy: 15.0
       min_speed_theta: 0.0
-      acc_lim_x: 5.0
-      acc_lim_y: 5.0
+      acc_lim_x: 15.0
+      acc_lim_y: 15.0
       acc_lim_theta: 1.0
-      decel_lim_x: -5.0
-      decel_lim_y: -5.0
+      decel_lim_x: -15.0
+      decel_lim_y: -15.0
       decel_lim_theta: -1.0
-      vx_samples: 15
-      vy_samples: 15
+      vx_samples: 30
+      vy_samples: 30
       vtheta_samples: 1
       sim_time: 0.6
       linear_granularity: 0.05

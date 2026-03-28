@@ -6,8 +6,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 SETUP_FILE="${WORKSPACE_DIR}/install/setup.bash"
 
-WIN_PWD=$(wslpath -w "$SCRIPT_DIR")
-
 if [[ ! -f "${SETUP_FILE}" ]]; then
   echo "Missing workspace setup: ${SETUP_FILE}"
   exit 1
@@ -27,7 +25,7 @@ tabs=(
   "Scan|ros2 launch pointcloud_to_laserscan pointcloud_to_laserscan_launch.py use_sim_time:=True target_frame:=base_link"
 )
 
-wt_args=(-w 0)
+is_first_tab=true
 
 for i in "${!tabs[@]}"; do
   title="${tabs[$i]%%|*}"
@@ -35,20 +33,16 @@ for i in "${!tabs[@]}"; do
 
   echo "Launching [${title}] ${cmd}"
 
-  if [[ "$i" -gt 0 ]]; then
-    wt_args+=(\;)
+  if [ "$is_first_tab" = true ]; then
+    # 第一个任务打开新窗口
+    gnome-terminal --window --title="${title}" --working-directory="${SCRIPT_DIR}" -- bash -c "source ${SETUP_FILE} && export RCUTILS_LOGGING_BUFFERED_STREAM=1 && ${cmd}; exec bash"
+    is_first_tab=false
+    sleep 0.5 # 稍作等待，确保主窗口已经建好
+  else
+    # 后续任务在当前激活的窗口中打开新标签
+    gnome-terminal --tab --title="${title}" --working-directory="${SCRIPT_DIR}" -- bash -c "source ${SETUP_FILE} && export RCUTILS_LOGGING_BUFFERED_STREAM=1 && ${cmd}; exec bash"
   fi
-
-  wt_args+=(
-    nt
-    --title "$title"
-    -d "$WIN_PWD"
-    wsl.exe -d Ubuntu-20.04 -- bash -c
-    "source ../install/setup.bash && export RCUTILS_LOGGING_BUFFERED_STREAM=1 && ${cmd} \\; exec bash"
-  )
 done
-
-wt.exe "${wt_args[@]}"
 
 echo "Opened all pre-simulation tabs. Suggested checks:"
 echo "  ros2 topic echo /clock --num 1"
