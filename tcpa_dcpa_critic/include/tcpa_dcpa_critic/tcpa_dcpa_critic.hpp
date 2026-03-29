@@ -54,6 +54,9 @@ private:
   double lateral_escape_ratio_{1.2};
   double goal_progress_penalty_scale_{1.2};
   double goal_progress_speed_threshold_{0.8};
+  double escape_alignment_penalty_scale_{2.0};
+  double escape_alignment_speed_threshold_{1.2};
+  double escape_lateral_weight_{1.5};
   double direction_flip_penalty_scale_{0.8};
   double direction_flip_speed_threshold_{0.2};
   double current_velocity_x_{0.0};

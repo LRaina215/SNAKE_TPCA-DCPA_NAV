@@ -47,6 +47,12 @@ void TCPADCPACritic::onInit()
   nav2_util::declare_parameter_if_not_declared(
     node, critic_ns + ".goal_progress_speed_threshold", rclcpp::ParameterValue(0.8));
   nav2_util::declare_parameter_if_not_declared(
+    node, critic_ns + ".escape_alignment_penalty_scale", rclcpp::ParameterValue(2.0));
+  nav2_util::declare_parameter_if_not_declared(
+    node, critic_ns + ".escape_alignment_speed_threshold", rclcpp::ParameterValue(1.2));
+  nav2_util::declare_parameter_if_not_declared(
+    node, critic_ns + ".escape_lateral_weight", rclcpp::ParameterValue(1.5));
+  nav2_util::declare_parameter_if_not_declared(
     node, critic_ns + ".direction_flip_penalty_scale", rclcpp::ParameterValue(0.8));
   nav2_util::declare_parameter_if_not_declared(
     node, critic_ns + ".direction_flip_speed_threshold", rclcpp::ParameterValue(0.2));
@@ -65,6 +71,9 @@ void TCPADCPACritic::onInit()
   node->get_parameter(critic_ns + ".lateral_escape_ratio", lateral_escape_ratio_);
   node->get_parameter(critic_ns + ".goal_progress_penalty_scale", goal_progress_penalty_scale_);
   node->get_parameter(critic_ns + ".goal_progress_speed_threshold", goal_progress_speed_threshold_);
+  node->get_parameter(critic_ns + ".escape_alignment_penalty_scale", escape_alignment_penalty_scale_);
+  node->get_parameter(critic_ns + ".escape_alignment_speed_threshold", escape_alignment_speed_threshold_);
+  node->get_parameter(critic_ns + ".escape_lateral_weight", escape_lateral_weight_);
   node->get_parameter(critic_ns + ".direction_flip_penalty_scale", direction_flip_penalty_scale_);
   node->get_parameter(critic_ns + ".direction_flip_speed_threshold", direction_flip_speed_threshold_);
 
@@ -97,6 +106,9 @@ void TCPADCPACritic::onInit()
   lateral_escape_ratio_ = std::max(1.0, lateral_escape_ratio_);
   goal_progress_penalty_scale_ = std::max(0.0, goal_progress_penalty_scale_);
   goal_progress_speed_threshold_ = std::max(0.0, goal_progress_speed_threshold_);
+  escape_alignment_penalty_scale_ = std::max(0.0, escape_alignment_penalty_scale_);
+  escape_alignment_speed_threshold_ = std::max(0.0, escape_alignment_speed_threshold_);
+  escape_lateral_weight_ = std::max(0.0, escape_lateral_weight_);
   direction_flip_penalty_scale_ = std::max(0.0, direction_flip_penalty_scale_);
   direction_flip_speed_threshold_ = std::max(0.0, direction_flip_speed_threshold_);
 
@@ -199,13 +211,38 @@ double TCPADCPACritic::scoreTrajectory(const dwb_msgs::msg::Trajectory2D & traj)
         total_cost += lateral_escape_penalty_scale_ * risk_term * lateral_speed_deficit;
       }
 
-      if (has_goal_direction_ && goal_progress_speed_threshold_ > 1e-9) {
-        const double goal_progress_speed =
+      double goal_progress_speed = 0.0;
+      if (has_goal_direction_) {
+        goal_progress_speed =
           (robot_vx * goal_direction_x_) + (robot_vy * goal_direction_y_);
-        if (goal_progress_speed < goal_progress_speed_threshold_) {
+        if (goal_progress_speed_threshold_ > 1e-9 &&
+          goal_progress_speed < goal_progress_speed_threshold_)
+        {
           const double goal_progress_deficit =
             (goal_progress_speed_threshold_ - goal_progress_speed) / goal_progress_speed_threshold_;
           total_cost += goal_progress_penalty_scale_ * risk_term * goal_progress_deficit;
+        }
+      }
+
+      if (has_goal_direction_ && escape_alignment_speed_threshold_ > 1e-9) {
+        const double side_sign = (rel_py >= 0.0) ? 1.0 : -1.0;
+        const double preferred_escape_x = goal_direction_x_;
+        const double preferred_escape_y =
+          goal_direction_y_ - (side_sign * escape_lateral_weight_);
+        const double preferred_escape_norm =
+          std::hypot(preferred_escape_x, preferred_escape_y);
+        if (preferred_escape_norm > 1e-9) {
+          const double preferred_escape_dir_x = preferred_escape_x / preferred_escape_norm;
+          const double preferred_escape_dir_y = preferred_escape_y / preferred_escape_norm;
+          const double escape_alignment_speed =
+            (robot_vx * preferred_escape_dir_x) + (robot_vy * preferred_escape_dir_y);
+          if (escape_alignment_speed < escape_alignment_speed_threshold_) {
+            const double escape_alignment_deficit =
+              (escape_alignment_speed_threshold_ - escape_alignment_speed) /
+              escape_alignment_speed_threshold_;
+            total_cost +=
+              escape_alignment_penalty_scale_ * risk_term * escape_alignment_deficit;
+          }
         }
       }
     }

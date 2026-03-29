@@ -173,20 +173,23 @@ controller_server:
       GoalDist.scale: 16.0
       TCPADCPA.plugin: "tcpa_dcpa_critic::TCPADCPACritic"
       TCPADCPA.scale: 10.0
-      TCPADCPA.tau_safe: 1.0
-      TCPADCPA.sigma_safe: 0.6
+      TCPADCPA.tau_safe: 2.0
+      TCPADCPA.sigma_safe: 0.8
       TCPADCPA.tracked_topic: "/tracked_obstacles"
       TCPADCPA.max_obstacle_age: 0.5
       TCPADCPA.min_obstacle_speed: 0.05
       TCPADCPA.hesitation_speed_threshold: 1.0
       TCPADCPA.hesitation_penalty_scale: 2.0
-      TCPADCPA.urgency_tcpa_threshold: 0.8
-      TCPADCPA.urgency_dcpa_threshold: 1.0
+      TCPADCPA.urgency_tcpa_threshold: 1.2
+      TCPADCPA.urgency_dcpa_threshold: 1.2
       TCPADCPA.lateral_escape_penalty_scale: 3.5
       TCPADCPA.lateral_escape_speed_threshold: 1.6
       TCPADCPA.lateral_escape_ratio: 1.15
-      TCPADCPA.goal_progress_penalty_scale: 1.6
-      TCPADCPA.goal_progress_speed_threshold: 0.9
+      TCPADCPA.goal_progress_penalty_scale: 2.0
+      TCPADCPA.goal_progress_speed_threshold: 1.2
+      TCPADCPA.escape_alignment_penalty_scale: 2.8
+      TCPADCPA.escape_alignment_speed_threshold: 1.8
+      TCPADCPA.escape_lateral_weight: 1.8
       TCPADCPA.direction_flip_penalty_scale: 1.5
       TCPADCPA.direction_flip_speed_threshold: 0.05
       RotateToGoal.scale: 0.0
