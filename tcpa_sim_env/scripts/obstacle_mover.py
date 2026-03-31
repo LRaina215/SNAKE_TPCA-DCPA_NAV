@@ -4,6 +4,7 @@ from geometry_msgs.msg import PoseStamped
 from geometry_msgs.msg import Twist
 import rclpy
 from rclpy.node import Node
+from std_srvs.srv import Empty
 
 
 class ObstacleMover(Node):
@@ -29,6 +30,7 @@ class ObstacleMover(Node):
             self.create_subscription(Twist, '/cmd_vel', self._on_cmd_vel, 10),
             self.create_subscription(Twist, 'cmd_vel', self._on_cmd_vel, 10),
         ]
+        self.reset_srv = self.create_service(Empty, 'reset_motion', self._handle_reset_motion)
         self.create_timer(0.05, self._publish_commands)
         self.get_logger().info(
             'Waiting for first nav goal or non-zero cmd_vel before starting obstacle motion.'
@@ -55,6 +57,15 @@ class ObstacleMover(Node):
             return
 
         self._enable_motion('received non-zero cmd_vel')
+
+    def _handle_reset_motion(self, _request: Empty.Request, response: Empty.Response) -> Empty.Response:
+        self.motion_enabled = False
+        self.motion_start_time = None
+        stop = Twist()
+        self.obs1_pub.publish(stop)
+        self.obs2_pub.publish(stop)
+        self.get_logger().info('Obstacle motion reset; waiting for next goal trigger.')
+        return response
 
     def _publish_commands(self) -> None:
         obs1_cmd = Twist()
