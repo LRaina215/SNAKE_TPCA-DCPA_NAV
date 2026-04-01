@@ -63,6 +63,12 @@ void TCPADCPACritic::onInit()
   nav2_util::declare_parameter_if_not_declared(
     node, critic_ns + ".crossing_obstacle_lateral_dominance_ratio", rclcpp::ParameterValue(1.2));
   nav2_util::declare_parameter_if_not_declared(
+    node, critic_ns + ".swept_corridor_penalty_scale", rclcpp::ParameterValue(0.0));
+  nav2_util::declare_parameter_if_not_declared(
+    node, critic_ns + ".swept_corridor_half_width", rclcpp::ParameterValue(0.8));
+  nav2_util::declare_parameter_if_not_declared(
+    node, critic_ns + ".rear_tail_margin", rclcpp::ParameterValue(0.2));
+  nav2_util::declare_parameter_if_not_declared(
     node, critic_ns + ".direction_flip_penalty_scale", rclcpp::ParameterValue(0.8));
   nav2_util::declare_parameter_if_not_declared(
     node, critic_ns + ".direction_flip_speed_threshold", rclcpp::ParameterValue(0.2));
@@ -95,6 +101,12 @@ void TCPADCPACritic::onInit()
   node->get_parameter(
     critic_ns + ".crossing_obstacle_lateral_dominance_ratio",
     crossing_obstacle_lateral_dominance_ratio_);
+  node->get_parameter(
+    critic_ns + ".swept_corridor_penalty_scale", swept_corridor_penalty_scale_);
+  node->get_parameter(
+    critic_ns + ".swept_corridor_half_width", swept_corridor_half_width_);
+  node->get_parameter(
+    critic_ns + ".rear_tail_margin", rear_tail_margin_);
   node->get_parameter(critic_ns + ".direction_flip_penalty_scale", direction_flip_penalty_scale_);
   node->get_parameter(critic_ns + ".direction_flip_speed_threshold", direction_flip_speed_threshold_);
 
@@ -137,6 +149,9 @@ void TCPADCPACritic::onInit()
     std::max(0.0, crossing_obstacle_lateral_speed_threshold_);
   crossing_obstacle_lateral_dominance_ratio_ =
     std::max(1.0, crossing_obstacle_lateral_dominance_ratio_);
+  swept_corridor_penalty_scale_ = std::max(0.0, swept_corridor_penalty_scale_);
+  swept_corridor_half_width_ = std::max(0.0, swept_corridor_half_width_);
+  rear_tail_margin_ = std::max(0.0, rear_tail_margin_);
   direction_flip_penalty_scale_ = std::max(0.0, direction_flip_penalty_scale_);
   direction_flip_speed_threshold_ = std::max(0.0, direction_flip_speed_threshold_);
 
@@ -269,6 +284,38 @@ double TCPADCPACritic::scoreTrajectory(const dwb_msgs::msg::Trajectory2D & traj)
             std::min(1.0, (-desired_lateral_speed) /
             std::max(lateral_escape_speed_threshold_, 1e-3));
           total_cost += rear_passing_penalty_scale_ * risk_term * (1.0 + follow_speed_ratio);
+        }
+
+        if (swept_corridor_penalty_scale_ > 1e-9 && swept_corridor_half_width_ > 1e-9) {
+          const double eval_time = std::min(tcpa, urgency_tcpa_threshold_);
+          const double robot_pred_x = robot_pose.x + (robot_vx * eval_time);
+          const double robot_pred_y = robot_pose.y + (robot_vy * eval_time);
+          const double obstacle_pred_x = obstacle.position.x + (obstacle.velocity.x * eval_time);
+          const double obstacle_pred_y = obstacle.position.y + (obstacle.velocity.y * eval_time);
+
+          const double obs_dir_x = obstacle.velocity.x / obstacle_speed;
+          const double obs_dir_y = obstacle.velocity.y / obstacle_speed;
+          const double obs_normal_x = -obs_dir_y;
+          const double obs_normal_y = obs_dir_x;
+
+          const double from_obstacle_x = robot_pred_x - obstacle_pred_x;
+          const double from_obstacle_y = robot_pred_y - obstacle_pred_y;
+          const double corridor_longitudinal =
+            (from_obstacle_x * obs_dir_x) + (from_obstacle_y * obs_dir_y);
+          const double corridor_lateral =
+            std::abs((from_obstacle_x * obs_normal_x) + (from_obstacle_y * obs_normal_y));
+
+          if (corridor_lateral < swept_corridor_half_width_ &&
+            corridor_longitudinal > -rear_tail_margin_)
+          {
+            const double lateral_exposure =
+              1.0 - (corridor_lateral / swept_corridor_half_width_);
+            const double longitudinal_exposure =
+              (corridor_longitudinal + rear_tail_margin_) /
+              std::max(rear_tail_margin_ + swept_corridor_half_width_, 1e-3);
+            total_cost += swept_corridor_penalty_scale_ * risk_term *
+              (lateral_exposure + longitudinal_exposure);
+          }
         }
       }
     }

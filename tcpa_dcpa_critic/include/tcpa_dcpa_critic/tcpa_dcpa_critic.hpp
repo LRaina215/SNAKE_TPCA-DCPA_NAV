@@ -62,6 +62,9 @@ private:
   double crossing_front_max_lateral_offset_{1.2};
   double crossing_obstacle_lateral_speed_threshold_{0.3};
   double crossing_obstacle_lateral_dominance_ratio_{1.2};
+  double swept_corridor_penalty_scale_{0.0};
+  double swept_corridor_half_width_{0.8};
+  double rear_tail_margin_{0.2};
   double direction_flip_penalty_scale_{0.8};
   double direction_flip_speed_threshold_{0.2};
   double current_velocity_x_{0.0};
