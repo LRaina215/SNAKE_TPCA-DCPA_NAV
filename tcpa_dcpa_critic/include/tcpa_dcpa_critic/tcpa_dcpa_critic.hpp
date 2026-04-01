@@ -57,6 +57,11 @@ private:
   double escape_alignment_penalty_scale_{2.0};
   double escape_alignment_speed_threshold_{1.2};
   double escape_lateral_weight_{1.5};
+  double rear_passing_penalty_scale_{0.0};
+  double crossing_front_min_forward_distance_{0.3};
+  double crossing_front_max_lateral_offset_{1.2};
+  double crossing_obstacle_lateral_speed_threshold_{0.3};
+  double crossing_obstacle_lateral_dominance_ratio_{1.2};
   double direction_flip_penalty_scale_{0.8};
   double direction_flip_speed_threshold_{0.2};
   double current_velocity_x_{0.0};

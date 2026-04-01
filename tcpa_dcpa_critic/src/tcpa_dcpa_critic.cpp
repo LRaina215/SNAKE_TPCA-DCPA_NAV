@@ -53,6 +53,16 @@ void TCPADCPACritic::onInit()
   nav2_util::declare_parameter_if_not_declared(
     node, critic_ns + ".escape_lateral_weight", rclcpp::ParameterValue(1.5));
   nav2_util::declare_parameter_if_not_declared(
+    node, critic_ns + ".rear_passing_penalty_scale", rclcpp::ParameterValue(0.0));
+  nav2_util::declare_parameter_if_not_declared(
+    node, critic_ns + ".crossing_front_min_forward_distance", rclcpp::ParameterValue(0.3));
+  nav2_util::declare_parameter_if_not_declared(
+    node, critic_ns + ".crossing_front_max_lateral_offset", rclcpp::ParameterValue(1.2));
+  nav2_util::declare_parameter_if_not_declared(
+    node, critic_ns + ".crossing_obstacle_lateral_speed_threshold", rclcpp::ParameterValue(0.3));
+  nav2_util::declare_parameter_if_not_declared(
+    node, critic_ns + ".crossing_obstacle_lateral_dominance_ratio", rclcpp::ParameterValue(1.2));
+  nav2_util::declare_parameter_if_not_declared(
     node, critic_ns + ".direction_flip_penalty_scale", rclcpp::ParameterValue(0.8));
   nav2_util::declare_parameter_if_not_declared(
     node, critic_ns + ".direction_flip_speed_threshold", rclcpp::ParameterValue(0.2));
@@ -74,6 +84,17 @@ void TCPADCPACritic::onInit()
   node->get_parameter(critic_ns + ".escape_alignment_penalty_scale", escape_alignment_penalty_scale_);
   node->get_parameter(critic_ns + ".escape_alignment_speed_threshold", escape_alignment_speed_threshold_);
   node->get_parameter(critic_ns + ".escape_lateral_weight", escape_lateral_weight_);
+  node->get_parameter(critic_ns + ".rear_passing_penalty_scale", rear_passing_penalty_scale_);
+  node->get_parameter(
+    critic_ns + ".crossing_front_min_forward_distance", crossing_front_min_forward_distance_);
+  node->get_parameter(
+    critic_ns + ".crossing_front_max_lateral_offset", crossing_front_max_lateral_offset_);
+  node->get_parameter(
+    critic_ns + ".crossing_obstacle_lateral_speed_threshold",
+    crossing_obstacle_lateral_speed_threshold_);
+  node->get_parameter(
+    critic_ns + ".crossing_obstacle_lateral_dominance_ratio",
+    crossing_obstacle_lateral_dominance_ratio_);
   node->get_parameter(critic_ns + ".direction_flip_penalty_scale", direction_flip_penalty_scale_);
   node->get_parameter(critic_ns + ".direction_flip_speed_threshold", direction_flip_speed_threshold_);
 
@@ -109,6 +130,13 @@ void TCPADCPACritic::onInit()
   escape_alignment_penalty_scale_ = std::max(0.0, escape_alignment_penalty_scale_);
   escape_alignment_speed_threshold_ = std::max(0.0, escape_alignment_speed_threshold_);
   escape_lateral_weight_ = std::max(0.0, escape_lateral_weight_);
+  rear_passing_penalty_scale_ = std::max(0.0, rear_passing_penalty_scale_);
+  crossing_front_min_forward_distance_ = std::max(0.0, crossing_front_min_forward_distance_);
+  crossing_front_max_lateral_offset_ = std::max(0.0, crossing_front_max_lateral_offset_);
+  crossing_obstacle_lateral_speed_threshold_ =
+    std::max(0.0, crossing_obstacle_lateral_speed_threshold_);
+  crossing_obstacle_lateral_dominance_ratio_ =
+    std::max(1.0, crossing_obstacle_lateral_dominance_ratio_);
   direction_flip_penalty_scale_ = std::max(0.0, direction_flip_penalty_scale_);
   direction_flip_speed_threshold_ = std::max(0.0, direction_flip_speed_threshold_);
 
@@ -201,13 +229,61 @@ double TCPADCPACritic::scoreTrajectory(const dwb_msgs::msg::Trajectory2D & traj)
       total_cost += hesitation_penalty_scale_ * risk_term * speed_deficit;
     }
 
+    bool use_motion_based_escape = false;
+    double desired_escape_sign = 0.0;
+    double desired_lateral_speed = 0.0;
+    double goal_lateral_x = 0.0;
+    double goal_lateral_y = 0.0;
+    double robot_lateral_speed = robot_vy;
+    if (has_goal_direction_) {
+      goal_lateral_x = -goal_direction_y_;
+      goal_lateral_y = goal_direction_x_;
+
+      const double rel_forward =
+        (rel_px * goal_direction_x_) + (rel_py * goal_direction_y_);
+      const double rel_lateral =
+        (rel_px * goal_lateral_x) + (rel_py * goal_lateral_y);
+      const double obstacle_forward_speed =
+        (obstacle.velocity.x * goal_direction_x_) + (obstacle.velocity.y * goal_direction_y_);
+      const double obstacle_lateral_speed =
+        (obstacle.velocity.x * goal_lateral_x) + (obstacle.velocity.y * goal_lateral_y);
+      const double obstacle_lateral_abs = std::abs(obstacle_lateral_speed);
+      const double obstacle_forward_abs = std::abs(obstacle_forward_speed);
+
+      robot_lateral_speed = (robot_vx * goal_lateral_x) + (robot_vy * goal_lateral_y);
+
+      const bool front_crossing =
+        rel_forward >= crossing_front_min_forward_distance_ &&
+        std::abs(rel_lateral) <= crossing_front_max_lateral_offset_ &&
+        obstacle_lateral_abs >= crossing_obstacle_lateral_speed_threshold_ &&
+        obstacle_lateral_abs >=
+        (crossing_obstacle_lateral_dominance_ratio_ * obstacle_forward_abs);
+
+      if (front_crossing) {
+        use_motion_based_escape = true;
+        desired_escape_sign = (obstacle_lateral_speed >= 0.0) ? -1.0 : 1.0;
+        desired_lateral_speed = desired_escape_sign * robot_lateral_speed;
+
+        if (rear_passing_penalty_scale_ > 1e-9 && desired_lateral_speed < 0.0) {
+          const double follow_speed_ratio =
+            std::min(1.0, (-desired_lateral_speed) /
+            std::max(lateral_escape_speed_threshold_, 1e-3));
+          total_cost += rear_passing_penalty_scale_ * risk_term * (1.0 + follow_speed_ratio);
+        }
+      }
+    }
+
     const bool laterally_dominant = std::abs(rel_py) > (lateral_escape_ratio_ * std::abs(rel_px));
-    if (laterally_dominant && lateral_escape_speed_threshold_ > 1e-9) {
-      const double side_sign = (rel_py >= 0.0) ? 1.0 : -1.0;
-      const double away_lateral_speed = -side_sign * robot_vy;
-      if (away_lateral_speed < lateral_escape_speed_threshold_) {
+    if ((use_motion_based_escape || laterally_dominant) && lateral_escape_speed_threshold_ > 1e-9) {
+      if (!use_motion_based_escape) {
+        const double side_sign = (rel_py >= 0.0) ? 1.0 : -1.0;
+        desired_escape_sign = -side_sign;
+        desired_lateral_speed = desired_escape_sign * robot_vy;
+      }
+
+      if (desired_lateral_speed < lateral_escape_speed_threshold_) {
         const double lateral_speed_deficit =
-          (lateral_escape_speed_threshold_ - away_lateral_speed) / lateral_escape_speed_threshold_;
+          (lateral_escape_speed_threshold_ - desired_lateral_speed) / lateral_escape_speed_threshold_;
         total_cost += lateral_escape_penalty_scale_ * risk_term * lateral_speed_deficit;
       }
 
@@ -225,10 +301,10 @@ double TCPADCPACritic::scoreTrajectory(const dwb_msgs::msg::Trajectory2D & traj)
       }
 
       if (has_goal_direction_ && escape_alignment_speed_threshold_ > 1e-9) {
-        const double side_sign = (rel_py >= 0.0) ? 1.0 : -1.0;
-        const double preferred_escape_x = goal_direction_x_;
+        const double preferred_escape_x =
+          goal_direction_x_ + (desired_escape_sign * escape_lateral_weight_ * goal_lateral_x);
         const double preferred_escape_y =
-          goal_direction_y_ - (side_sign * escape_lateral_weight_);
+          goal_direction_y_ + (desired_escape_sign * escape_lateral_weight_ * goal_lateral_y);
         const double preferred_escape_norm =
           std::hypot(preferred_escape_x, preferred_escape_y);
         if (preferred_escape_norm > 1e-9) {
