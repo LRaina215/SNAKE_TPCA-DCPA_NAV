@@ -440,7 +440,6 @@ python3 run_ablation_eval.py --trials-per-group 50
 - `ablation_eval_output/ablation_results.csv`
 - `ablation_eval_output/logs/<group>/trial_xxx/sim_pre`
 - `ablation_eval_output/logs/<group>/trial_xxx/nav`
-
 其中：
 
 - `ablation_trials.csv`
