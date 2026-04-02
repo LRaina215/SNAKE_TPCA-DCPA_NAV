@@ -63,11 +63,17 @@ private:
   double crossing_front_max_lateral_offset_{1.2};
   double crossing_obstacle_lateral_speed_threshold_{0.3};
   double crossing_obstacle_lateral_dominance_ratio_{1.2};
+  double co_motion_relief_scale_{0.0};
+  double co_motion_relief_min_alignment_{0.75};
+  double co_motion_relief_max_relative_speed_{0.8};
+  double co_motion_relief_min_multiplier_{0.35};
   double swept_corridor_penalty_scale_{0.0};
   double swept_corridor_half_width_{0.8};
   double rear_tail_margin_{0.2};
   double direction_flip_penalty_scale_{0.8};
   double direction_flip_speed_threshold_{0.2};
+  double axis_commitment_penalty_scale_{0.0};
+  double axis_commitment_speed_threshold_{0.2};
   bool latency_stats_enabled_{false};
   int latency_report_interval_{500};
   std::size_t latency_sample_count_{0};

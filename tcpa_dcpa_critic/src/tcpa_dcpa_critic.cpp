@@ -64,6 +64,14 @@ void TCPADCPACritic::onInit()
   nav2_util::declare_parameter_if_not_declared(
     node, critic_ns + ".crossing_obstacle_lateral_dominance_ratio", rclcpp::ParameterValue(1.2));
   nav2_util::declare_parameter_if_not_declared(
+    node, critic_ns + ".co_motion_relief_scale", rclcpp::ParameterValue(0.0));
+  nav2_util::declare_parameter_if_not_declared(
+    node, critic_ns + ".co_motion_relief_min_alignment", rclcpp::ParameterValue(0.75));
+  nav2_util::declare_parameter_if_not_declared(
+    node, critic_ns + ".co_motion_relief_max_relative_speed", rclcpp::ParameterValue(0.8));
+  nav2_util::declare_parameter_if_not_declared(
+    node, critic_ns + ".co_motion_relief_min_multiplier", rclcpp::ParameterValue(0.35));
+  nav2_util::declare_parameter_if_not_declared(
     node, critic_ns + ".swept_corridor_penalty_scale", rclcpp::ParameterValue(0.0));
   nav2_util::declare_parameter_if_not_declared(
     node, critic_ns + ".swept_corridor_half_width", rclcpp::ParameterValue(0.8));
@@ -77,6 +85,10 @@ void TCPADCPACritic::onInit()
     node, critic_ns + ".direction_flip_penalty_scale", rclcpp::ParameterValue(0.8));
   nav2_util::declare_parameter_if_not_declared(
     node, critic_ns + ".direction_flip_speed_threshold", rclcpp::ParameterValue(0.2));
+  nav2_util::declare_parameter_if_not_declared(
+    node, critic_ns + ".axis_commitment_penalty_scale", rclcpp::ParameterValue(0.0));
+  nav2_util::declare_parameter_if_not_declared(
+    node, critic_ns + ".axis_commitment_speed_threshold", rclcpp::ParameterValue(0.2));
 
   node->get_parameter(critic_ns + ".tau_safe", tau_safe_);
   node->get_parameter(critic_ns + ".sigma_safe", sigma_safe_);
@@ -107,6 +119,14 @@ void TCPADCPACritic::onInit()
     critic_ns + ".crossing_obstacle_lateral_dominance_ratio",
     crossing_obstacle_lateral_dominance_ratio_);
   node->get_parameter(
+    critic_ns + ".co_motion_relief_scale", co_motion_relief_scale_);
+  node->get_parameter(
+    critic_ns + ".co_motion_relief_min_alignment", co_motion_relief_min_alignment_);
+  node->get_parameter(
+    critic_ns + ".co_motion_relief_max_relative_speed", co_motion_relief_max_relative_speed_);
+  node->get_parameter(
+    critic_ns + ".co_motion_relief_min_multiplier", co_motion_relief_min_multiplier_);
+  node->get_parameter(
     critic_ns + ".swept_corridor_penalty_scale", swept_corridor_penalty_scale_);
   node->get_parameter(
     critic_ns + ".swept_corridor_half_width", swept_corridor_half_width_);
@@ -118,6 +138,10 @@ void TCPADCPACritic::onInit()
     critic_ns + ".latency_report_interval", latency_report_interval_);
   node->get_parameter(critic_ns + ".direction_flip_penalty_scale", direction_flip_penalty_scale_);
   node->get_parameter(critic_ns + ".direction_flip_speed_threshold", direction_flip_speed_threshold_);
+  node->get_parameter(
+    critic_ns + ".axis_commitment_penalty_scale", axis_commitment_penalty_scale_);
+  node->get_parameter(
+    critic_ns + ".axis_commitment_speed_threshold", axis_commitment_speed_threshold_);
 
   if (tau_safe_ <= 0.0) {
     RCLCPP_WARN(
@@ -158,12 +182,22 @@ void TCPADCPACritic::onInit()
     std::max(0.0, crossing_obstacle_lateral_speed_threshold_);
   crossing_obstacle_lateral_dominance_ratio_ =
     std::max(1.0, crossing_obstacle_lateral_dominance_ratio_);
+  co_motion_relief_scale_ = std::max(0.0, co_motion_relief_scale_);
+  co_motion_relief_min_alignment_ =
+    std::max(-1.0, std::min(1.0, co_motion_relief_min_alignment_));
+  if (co_motion_relief_max_relative_speed_ <= 0.0) {
+    co_motion_relief_max_relative_speed_ = 1e-3;
+  }
+  co_motion_relief_min_multiplier_ =
+    std::max(0.0, std::min(1.0, co_motion_relief_min_multiplier_));
   swept_corridor_penalty_scale_ = std::max(0.0, swept_corridor_penalty_scale_);
   swept_corridor_half_width_ = std::max(0.0, swept_corridor_half_width_);
   rear_tail_margin_ = std::max(0.0, rear_tail_margin_);
   latency_report_interval_ = std::max(1, latency_report_interval_);
   direction_flip_penalty_scale_ = std::max(0.0, direction_flip_penalty_scale_);
   direction_flip_speed_threshold_ = std::max(0.0, direction_flip_speed_threshold_);
+  axis_commitment_penalty_scale_ = std::max(0.0, axis_commitment_penalty_scale_);
+  axis_commitment_speed_threshold_ = std::max(0.0, axis_commitment_speed_threshold_);
 
   tracked_obstacles_sub_ = node->create_subscription<predictive_navigation_msgs::msg::TrackedObstacleArray>(
     tracked_topic_, rclcpp::SystemDefaultsQoS(),
@@ -205,6 +239,8 @@ double TCPADCPACritic::scoreTrajectory(const dwb_msgs::msg::Trajectory2D & traj)
   const auto & robot_pose = traj.poses.front();
   const double robot_vx = traj.velocity.x;
   const double robot_vy = traj.velocity.y;
+  const double traj_speed = std::hypot(robot_vx, robot_vy);
+  const double current_speed = std::hypot(current_velocity_x_, current_velocity_y_);
   const double sigma_safe_sq = sigma_safe_ * sigma_safe_;
   double total_cost = 0.0;
 
@@ -240,7 +276,32 @@ double TCPADCPACritic::scoreTrajectory(const dwb_msgs::msg::Trajectory2D & traj)
     const double dcpa = std::sqrt(dcpa_sq);
     const double temporal_term = std::exp(-tcpa / tau_safe_);
     const double spatial_term = std::exp(-dcpa_sq / (2.0 * sigma_safe_sq));
-    const double risk_term = temporal_term * spatial_term;
+    double risk_term = temporal_term * spatial_term;
+
+    if (
+      co_motion_relief_scale_ > 1e-9 &&
+      traj_speed > 1e-9 &&
+      obstacle_speed > 1e-9)
+    {
+      const double velocity_alignment =
+        ((robot_vx * obstacle.velocity.x) + (robot_vy * obstacle.velocity.y)) /
+        (traj_speed * obstacle_speed);
+      const double relative_speed = std::sqrt(rel_v_sq);
+      if (
+        velocity_alignment > co_motion_relief_min_alignment_ &&
+        relative_speed < co_motion_relief_max_relative_speed_)
+      {
+        const double alignment_ratio =
+          (velocity_alignment - co_motion_relief_min_alignment_) /
+          std::max(1e-6, 1.0 - co_motion_relief_min_alignment_);
+        const double relative_speed_ratio =
+          1.0 - (relative_speed / co_motion_relief_max_relative_speed_);
+        const double relief =
+          co_motion_relief_scale_ * alignment_ratio * relative_speed_ratio;
+        risk_term *= std::max(co_motion_relief_min_multiplier_, 1.0 - relief);
+      }
+    }
+
     total_cost += risk_term;
 
     const bool urgent_interaction =
@@ -249,7 +310,6 @@ double TCPADCPACritic::scoreTrajectory(const dwb_msgs::msg::Trajectory2D & traj)
       continue;
     }
 
-    const double traj_speed = std::hypot(robot_vx, robot_vy);
     if (traj_speed < hesitation_speed_threshold_ && hesitation_speed_threshold_ > 1e-9) {
       const double speed_deficit = 1.0 - (traj_speed / hesitation_speed_threshold_);
       total_cost += hesitation_penalty_scale_ * risk_term * speed_deficit;
@@ -381,7 +441,6 @@ double TCPADCPACritic::scoreTrajectory(const dwb_msgs::msg::Trajectory2D & traj)
       }
     }
 
-    const double current_speed = std::hypot(current_velocity_x_, current_velocity_y_);
     if (traj_speed > 1e-9 && current_speed > direction_flip_speed_threshold_) {
       const double normalized_dot =
         ((robot_vx * current_velocity_x_) + (robot_vy * current_velocity_y_)) /
@@ -389,6 +448,26 @@ double TCPADCPACritic::scoreTrajectory(const dwb_msgs::msg::Trajectory2D & traj)
       if (normalized_dot < 0.0) {
         total_cost += direction_flip_penalty_scale_ * risk_term * (-normalized_dot);
       }
+    }
+
+    if (axis_commitment_penalty_scale_ > 1e-9 && axis_commitment_speed_threshold_ > 1e-9) {
+      const auto apply_axis_commitment = [&](double current_axis_speed, double traj_axis_speed) {
+          if (
+            std::abs(current_axis_speed) <= axis_commitment_speed_threshold_ ||
+            std::abs(traj_axis_speed) <= axis_commitment_speed_threshold_ ||
+            current_axis_speed * traj_axis_speed >= 0.0)
+          {
+            return;
+          }
+
+          const double axis_ratio =
+            std::min(std::abs(traj_axis_speed), std::abs(current_axis_speed)) /
+            std::max(std::abs(current_axis_speed), axis_commitment_speed_threshold_);
+          total_cost += axis_commitment_penalty_scale_ * risk_term * axis_ratio;
+        };
+
+      apply_axis_commitment(current_velocity_x_, robot_vx);
+      apply_axis_commitment(current_velocity_y_, robot_vy);
     }
   }
 

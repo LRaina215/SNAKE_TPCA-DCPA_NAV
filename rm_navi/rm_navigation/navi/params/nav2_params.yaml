@@ -144,7 +144,7 @@ controller_server:
       vx_samples: 30
       vy_samples: 30
       vtheta_samples: 1
-      sim_time: 0.6
+      sim_time: 0.45
       linear_granularity: 0.05
       angular_granularity: 0.025
       transform_tolerance: 2.0
@@ -195,6 +195,10 @@ controller_server:
       TCPADCPA.crossing_front_max_lateral_offset: 1.4
       TCPADCPA.crossing_obstacle_lateral_speed_threshold: 0.35
       TCPADCPA.crossing_obstacle_lateral_dominance_ratio: 1.1
+      TCPADCPA.co_motion_relief_scale: 0.65
+      TCPADCPA.co_motion_relief_min_alignment: 0.7
+      TCPADCPA.co_motion_relief_max_relative_speed: 1.1
+      TCPADCPA.co_motion_relief_min_multiplier: 0.4
       TCPADCPA.swept_corridor_penalty_scale: 3.2
       TCPADCPA.swept_corridor_half_width: 0.85
       TCPADCPA.rear_tail_margin: 0.25
@@ -202,6 +206,8 @@ controller_server:
       TCPADCPA.latency_report_interval: 500
       TCPADCPA.direction_flip_penalty_scale: 1.5
       TCPADCPA.direction_flip_speed_threshold: 0.05
+      TCPADCPA.axis_commitment_penalty_scale: 2.2
+      TCPADCPA.axis_commitment_speed_threshold: 0.2
       RotateToGoal.scale: 0.0
       RotateToGoal.slowing_factor: 5.0
       RotateToGoal.lookahead_time: -1.0
