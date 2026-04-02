@@ -458,12 +458,36 @@ cd /home/lraina/auto_shao/src
 当前默认统计的核心指标包括：
 
 - `Success Rate`
+- `Collision Count`
 - `Mean Navigation Time`
 - `Average Translational Speed`
 - `Minimum Clearance`
 - `Velocity Sign-Flip Count`
+- `Algorithm Latency`
 
-其中 `Velocity Sign-Flip Count` 用于专门量化机器人在动态障碍来袭时的前后抖动和犹豫行为，是当前论文实验里非常关键的指标。
+这些指标当前的含义需要特别说明：
+
+- `Success Rate`
+  - 仅表示该轮导航任务是否被评测脚本判定为成功到达目标
+  - 判定依据仍然是 `NavigateToPose` 返回结果、终点距离校验和最小路径长度校验
+  - 不再把“是否发生碰撞”直接并入 success 定义
+- `Collision Count`
+  - 单独统计一轮导航过程中发生了多少次碰撞事件
+  - 当前实现按“接触段”计数：进入一次碰撞状态记 1 次，持续接触不会在每个周期重复累加
+  - 该指标用于把“能到达”和“到达过程中撞了几次”拆开分析
+- `Velocity Sign-Flip Count`
+  - 用于量化机器人在动态障碍来袭时的前后抖动和犹豫行为
+  - 本质上统计短时间窗口内 `cmd_vel.x` 的正负号翻转次数
+- `Algorithm Latency`
+  - 用于统计局部规划相关模块的平均计算耗时
+  - `RiskOnly / Full` 当前记录的是 `tcpa_dcpa_critic` 的平均评分耗时
+  - `TEB` 当前记录的是 `teb_local_planner` 的平均规划调用耗时
+
+因此，当前脚本导出的结果应按下面的方式解读：
+
+- `success` / `Success Rate` 回答的是“这轮有没有到达目标”
+- `collision_count` 回答的是“这轮到达或失败过程中撞了多少次”
+- 两者是并列指标，而不是互相覆盖的单一指标
 
 除此之外，脚本当前还增加了两层结果有效性校验：
 
@@ -510,17 +534,30 @@ python3 run_ablation_eval.py --trials-per-group 50 --include-teb
 - `ablation_trials.csv`
   - 保存每一轮实验的原始结果
   - 适合后续手工排查异常轮次
+  - 当前关键列包括：
+    - `success`
+    - `outcome`
+    - `collision_count`
+    - `min_clearance_m`
+    - `velocity_sign_flip_count`
+    - `tracker_latency_ms`
+    - `algorithm_latency_ms`
 - `ablation_results.csv`
   - 保存按实验组汇总后的均值与方差
   - 可直接用于整理论文中的定量对比表
+  - 当前会额外汇总：
+    - `collision_count_mean / collision_count_var`
+    - `algorithm_latency_ms_mean / algorithm_latency_ms_var`
+    - `algorithm_latency_source`
 - `logs/ablation/<group>/trial_xxx/...`
   - 保存每一轮独立 trial 的启动与导航日志
   - 当某一轮出现 `aborted`、`timeout` 或异常成功时，可直接对照该轮日志核查
 
 当前建议的结果解读方式是：
 
-- `Success Rate`、`Mean Navigation Time`、`Average Translational Speed`、`Velocity Sign-Flip Count` 可以直接用于三组方法横向对比
+- `Success Rate`、`Collision Count`、`Mean Navigation Time`、`Average Translational Speed`、`Velocity Sign-Flip Count` 可以直接用于三组方法横向对比
 - `Minimum Clearance` 当前更适合做相对比较，而不是绝对碰撞真值
+- `Algorithm Latency` 可用于补充计算开销对照，但应在论文中明确写明其统计来源
 
 原因是：
 
@@ -611,6 +648,25 @@ python3 run_ablation_eval.py --trials-per-group 50 --run-multi-scenario --multi-
 
 - 你的前端跟踪与 DWB critic 是否足够轻量
 - 相比 `TEB`，当前方法是否在保持通过能力的同时显著降低控制计算延迟
+
+为了便于直接整理实验表格，`run_ablation_eval.py` 当前也会把可解析到的延迟统计写入 CSV：
+
+- `ablation_trials.csv`
+  - `tracker_latency_ms`
+  - `algorithm_latency_ms`
+  - `algorithm_latency_source`
+- `ablation_results.csv`
+  - `tracker_latency_ms_mean / var`
+  - `algorithm_latency_ms_mean / var`
+  - `algorithm_latency_source`
+
+其中需要注意：
+
+- `Baseline` 由于没有自定义风险 critic，因此 `algorithm_latency_ms` 可能为空
+- `tracker_latency_ms` 当前依赖前端链路是否稳定输出可匹配的时间戳；若前端无有效样本，该列可能为空
+- 因此论文里更稳妥的做法是：
+  - 把 `algorithm_latency_ms` 作为主延迟指标
+  - 把 `tracker_latency_ms` 视为可选补充项，只有在数据稳定时再纳入正文表格
 
 其中 `TEB` 组当前的定位是：
 

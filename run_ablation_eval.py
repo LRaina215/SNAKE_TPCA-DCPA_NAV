@@ -136,6 +136,7 @@ class TrialResult:
     navigation_time_s: float
     average_speed_mps: float
     min_clearance_m: float
+    collision_count: int
     velocity_sign_flip_count: int
     path_length_m: float
     tracker_latency_ms: float
@@ -339,6 +340,8 @@ class AblationEvaluator(Node):
         self._min_clearance = math.inf
         self._collision_detected = False
         self._collision_observed = False
+        self._collision_count = 0
+        self._collision_active = False
         self._velocity_sign_flips = 0
         self._last_nonzero_cmd_sign = 0
         self._last_nonzero_cmd_wall = 0.0
@@ -700,6 +703,7 @@ class AblationEvaluator(Node):
             navigation_time_s=float("nan"),
             average_speed_mps=float("nan"),
             min_clearance_m=float("nan"),
+            collision_count=0,
             velocity_sign_flip_count=0,
             path_length_m=0.0,
             tracker_latency_ms=float("nan"),
@@ -833,6 +837,8 @@ class AblationEvaluator(Node):
         self._min_clearance = math.inf
         self._collision_detected = False
         self._collision_observed = False
+        self._collision_count = 0
+        self._collision_active = False
         self._velocity_sign_flips = 0
         self._last_nonzero_cmd_sign = 0
         self._last_nonzero_cmd_wall = 0.0
@@ -867,6 +873,7 @@ class AblationEvaluator(Node):
             navigation_time_s=nav_time,
             average_speed_mps=avg_speed if success else float("nan"),
             min_clearance_m=min_clearance,
+            collision_count=self._collision_count,
             velocity_sign_flip_count=self._velocity_sign_flips,
             path_length_m=self._path_length,
             tracker_latency_ms=tracker_latency_ms,
@@ -967,14 +974,23 @@ class AblationEvaluator(Node):
         if not obstacle_positions:
             return
 
+        collision_now = False
         for obstacle_xy in obstacle_positions:
             center_distance = math.hypot(robot_xy[0] - obstacle_xy[0], robot_xy[1] - obstacle_xy[1])
             clearance = center_distance - self.args.robot_radius - self.args.obstacle_radius
             self._min_clearance = min(self._min_clearance, clearance)
             if clearance <= self.args.collision_clearance_threshold:
-                self._collision_observed = True
-                if self.args.abort_on_estimated_collision:
-                    self._collision_detected = True
+                collision_now = True
+
+        if collision_now:
+            self._collision_observed = True
+            if not self._collision_active:
+                self._collision_count += 1
+            self._collision_active = True
+            if self.args.abort_on_estimated_collision:
+                self._collision_detected = True
+        else:
+            self._collision_active = False
 
     def _get_analytic_obstacle_positions(self, now_wall: float) -> List[Tuple[float, float]]:
         if self.current_analytic_clearance_mode != "dynamic_test":
@@ -1321,6 +1337,8 @@ def summarize_results_by_columns(results_df: pd.DataFrame, group_columns: Sequen
                 "average_translational_speed_mps_var": group_df["average_speed_mps"].var(ddof=1),
                 "minimum_clearance_m_mean": group_df["min_clearance_m"].mean(),
                 "minimum_clearance_m_var": group_df["min_clearance_m"].var(ddof=1),
+                "collision_count_mean": group_df["collision_count"].mean(),
+                "collision_count_var": group_df["collision_count"].var(ddof=1),
                 "velocity_sign_flip_count_mean": group_df["velocity_sign_flip_count"].mean(),
                 "velocity_sign_flip_count_var": group_df["velocity_sign_flip_count"].var(ddof=1),
                 "tracker_latency_ms_mean": group_df["tracker_latency_ms"].mean(),
