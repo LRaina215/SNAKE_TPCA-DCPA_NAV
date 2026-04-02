@@ -1,0 +1,264 @@
+<?xml version="1.0"?>
+<sdf version="1.6">
+  <world name="narrow_corridor">
+    <gravity>0 0 -9.8</gravity>
+    <magnetic_field>6e-06 2.3e-05 -4.2e-05</magnetic_field>
+    <atmosphere type="adiabatic"/>
+
+    <physics name="default_physics" type="ode">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+      <real_time_update_rate>1000</real_time_update_rate>
+    </physics>
+
+    <scene>
+      <ambient>0.45 0.45 0.45 1.0</ambient>
+      <background>0.75 0.82 0.88 1.0</background>
+      <shadows>false</shadows>
+    </scene>
+
+    <include>
+      <uri>model://ground_plane</uri>
+    </include>
+
+    <include>
+      <uri>model://sun</uri>
+    </include>
+
+    <model name="arena_floor">
+      <static>true</static>
+      <pose>0 0 0 0 0 0</pose>
+      <link name="floor_link">
+        <collision name="floor_collision">
+          <geometry>
+            <box>
+              <size>10 10 0.02</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="floor_visual">
+          <geometry>
+            <box>
+              <size>10 10 0.02</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.88 0.88 0.88 1.0</ambient>
+            <diffuse>0.88 0.88 0.88 1.0</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="north_wall">
+      <static>true</static>
+      <pose>0 5 0.25 0 0 0</pose>
+      <link name="wall_link">
+        <collision name="collision">
+          <geometry>
+            <box>
+              <size>10 0.15 0.5</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <box>
+              <size>10 0.15 0.5</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.55 0.55 0.60 1.0</ambient>
+            <diffuse>0.55 0.55 0.60 1.0</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="south_wall">
+      <static>true</static>
+      <pose>0 -5 0.25 0 0 0</pose>
+      <link name="wall_link">
+        <collision name="collision">
+          <geometry>
+            <box>
+              <size>10 0.15 0.5</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <box>
+              <size>10 0.15 0.5</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.55 0.55 0.60 1.0</ambient>
+            <diffuse>0.55 0.55 0.60 1.0</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="east_wall">
+      <static>true</static>
+      <pose>5 0 0.25 0 0 0</pose>
+      <link name="wall_link">
+        <collision name="collision">
+          <geometry>
+            <box>
+              <size>0.15 10 0.5</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <box>
+              <size>0.15 10 0.5</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.55 0.55 0.60 1.0</ambient>
+            <diffuse>0.55 0.55 0.60 1.0</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="west_wall">
+      <static>true</static>
+      <pose>-5 0 0.25 0 0 0</pose>
+      <link name="wall_link">
+        <collision name="collision">
+          <geometry>
+            <box>
+              <size>0.15 10 0.5</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <box>
+              <size>0.15 10 0.5</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.55 0.55 0.60 1.0</ambient>
+            <diffuse>0.55 0.55 0.60 1.0</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="corridor_wall_top">
+      <static>true</static>
+      <pose>0 1.35 0.35 0 0 0</pose>
+      <link name="wall_link">
+        <collision name="collision">
+          <geometry>
+            <box>
+              <size>8.8 0.2 0.7</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <box>
+              <size>8.8 0.2 0.7</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.36 0.45 0.66 1.0</ambient>
+            <diffuse>0.36 0.45 0.66 1.0</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="corridor_wall_bottom">
+      <static>true</static>
+      <pose>0 -1.35 0.35 0 0 0</pose>
+      <link name="wall_link">
+        <collision name="collision">
+          <geometry>
+            <box>
+              <size>8.8 0.2 0.7</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <box>
+              <size>8.8 0.2 0.7</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.36 0.45 0.66 1.0</ambient>
+            <diffuse>0.36 0.45 0.66 1.0</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="obs1">
+      <pose>2.4 0.0 0.75 0 0 0</pose>
+      <link name="obs1_link">
+        <gravity>true</gravity>
+        <kinematic>true</kinematic>
+        <self_collide>false</self_collide>
+        <inertial>
+          <mass>12.0</mass>
+          <inertia>
+            <ixx>2.52</ixx>
+            <ixy>0.0</ixy>
+            <ixz>0.0</ixz>
+            <iyy>2.52</iyy>
+            <iyz>0.0</iyz>
+            <izz>0.54</izz>
+          </inertia>
+        </inertial>
+        <collision name="collision">
+          <geometry>
+            <cylinder>
+              <radius>0.3</radius>
+              <length>1.5</length>
+            </cylinder>
+          </geometry>
+          <surface>
+            <friction>
+              <ode>
+                <mu>10.0</mu>
+                <mu2>10.0</mu2>
+              </ode>
+            </friction>
+          </surface>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <cylinder>
+              <radius>0.3</radius>
+              <length>1.5</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.88 0.20 0.20 1.0</ambient>
+            <diffuse>0.88 0.20 0.20 1.0</diffuse>
+          </material>
+        </visual>
+      </link>
+      <plugin name="obs1_planar_move" filename="libgazebo_ros_planar_move.so">
+        <ros>
+          <namespace>/obs1</namespace>
+          <remapping>cmd_vel:=cmd_vel</remapping>
+          <remapping>odom:=odom</remapping>
+        </ros>
+        <update_rate>100</update_rate>
+        <publish_rate>30</publish_rate>
+        <publish_odom>false</publish_odom>
+        <publish_odom_tf>false</publish_odom_tf>
+        <odometry_frame>obs1_odom</odometry_frame>
+        <robot_base_frame>obs1_link</robot_base_frame>
+      </plugin>
+    </model>
+  </world>
+</sdf>

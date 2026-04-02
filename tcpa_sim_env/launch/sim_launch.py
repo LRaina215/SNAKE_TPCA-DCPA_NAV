@@ -21,6 +21,7 @@ def generate_launch_description():
     gui = LaunchConfiguration('gui')
     world = LaunchConfiguration('world')
     lidar_backend = LaunchConfiguration('lidar_backend')
+    scene_mode = LaunchConfiguration('scene_mode')
     use_livox_plugin = IfCondition(PythonExpression(["'", lidar_backend, "' == 'livox_plugin'"]))
 
     robot_description = Command([
@@ -45,6 +46,11 @@ def generate_launch_description():
             'lidar_backend',
             default_value='livox_plugin',
             description='LiDAR backend to use: livox_plugin or gpu_ray.'
+        ),
+        DeclareLaunchArgument(
+            'scene_mode',
+            default_value='dynamic_test',
+            description='Obstacle motion scene profile: dynamic_test, narrow_corridor, or random_crowd.'
         ),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(gzserver_launch),
@@ -76,6 +82,7 @@ def generate_launch_description():
             output='screen',
             parameters=[{
                 'use_sim_time': True,
+                'scene_mode': scene_mode,
             }],
         ),
         Node(

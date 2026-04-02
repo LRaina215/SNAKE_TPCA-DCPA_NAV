@@ -1,0 +1,3 @@
+scenario,group,trial_index,success,outcome,navigation_time_s,average_speed_mps,min_clearance_m,velocity_sign_flip_count,path_length_m
+narrow_corridor,Full,1,0,startup_failed,,,,0,0.0
+random_crowd,Full,1,0,startup_failed,,,,0,0.0

@@ -199,6 +199,8 @@ controller_server:
       TCPADCPA.swept_corridor_penalty_scale: 3.2
       TCPADCPA.swept_corridor_half_width: 0.85
       TCPADCPA.rear_tail_margin: 0.25
+      TCPADCPA.latency_stats_enabled: true
+      TCPADCPA.latency_report_interval: 500
       TCPADCPA.direction_flip_penalty_scale: 1.5
       TCPADCPA.direction_flip_speed_threshold: 0.05
       RotateToGoal.scale: 0.0

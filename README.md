@@ -203,13 +203,23 @@ Cost_risk = exp(-TCPA / tau_safe) * exp(-DCPA^2 / (2 * sigma_safe^2))
   - 当轨迹虽然在避障，但沿目标方向的推进速度太差时加罚
 - `escape_alignment_penalty`
   - 偏好“朝目标前进 + 侧向脱离”的组合方向，而不是纯粹乱躲
+- `rear_passing_penalty`
+  - 当前方障碍物发生明显横穿时，惩罚机器人与障碍物沿同一横向方向“跟随式移动”，鼓励从其后方通过
+- `swept_corridor_penalty`
+  - 在关键预测时刻构造障碍物扫掠走廊，对仍落在障碍物前扫区域内的候选轨迹加罚，进一步偏好进入障碍物尾迹区域
 - `direction_flip_penalty`
   - 抑制当前速度方向与候选速度方向相反的采样，减少前后抖动
 
 因此，当前版本的 `TCPADCPA` 更准确地说是：
 
 - 基础层：时空预测风险评估
-- 工程层：犹豫抑制与逃逸方向偏好
+- 工程层：犹豫抑制、反跟随约束与后穿偏好
+
+补充说明：
+
+- 当前 critic 已不再只表达“离障碍远一点”
+- 在前方横穿场景下，它还会显式区分“障碍物前扫区域”和“障碍物后方尾迹区域”
+- 因此机器人当前的预期行为，已经从单纯侧移避让，进一步演化为“优先选择从动态障碍后方穿越”
 
 当前核心参数位于：
 
@@ -234,6 +244,14 @@ Cost_risk = exp(-TCPA / tau_safe) * exp(-DCPA^2 / (2 * sigma_safe^2))
 - `TCPADCPA.escape_alignment_penalty_scale: 2.8`
 - `TCPADCPA.escape_alignment_speed_threshold: 1.8`
 - `TCPADCPA.escape_lateral_weight: 1.8`
+- `TCPADCPA.rear_passing_penalty_scale: 4.0`
+- `TCPADCPA.crossing_front_min_forward_distance: 0.35`
+- `TCPADCPA.crossing_front_max_lateral_offset: 1.4`
+- `TCPADCPA.crossing_obstacle_lateral_speed_threshold: 0.35`
+- `TCPADCPA.crossing_obstacle_lateral_dominance_ratio: 1.1`
+- `TCPADCPA.swept_corridor_penalty_scale: 3.2`
+- `TCPADCPA.swept_corridor_half_width: 0.85`
+- `TCPADCPA.rear_tail_margin: 0.25`
 - `TCPADCPA.direction_flip_penalty_scale: 1.5`
 - `TCPADCPA.direction_flip_speed_threshold: 0.05`
 
@@ -313,7 +331,7 @@ cd /home/lraina/auto_shao/src
 
 ### 7. 消融实验入口
 
-当前已经准备了三组配置：
+当前已经准备了三组 DWB 消融配置，以及一组可选的 TEB 对照基线：
 
 - `Full`
   - 使用当前工作参数 `nav2_params.yaml`
@@ -321,12 +339,17 @@ cd /home/lraina/auto_shao/src
   - 去掉 `TCPADCPA`，只保留原生 DWB critics
 - `DWB RiskOnly`
   - 保留 `TCPADCPA` 基础风险项，但关闭犹豫惩罚、侧向逃逸、目标推进、方向对齐、方向翻转惩罚
+- `TEB Baseline`
+  - 使用 `teb_local_planner`
+  - 仍沿用当前仿真中的 `/scan_nav` 局部代价地图输入
+  - 当前为了保证 ROS 2 Galactic 下批量实验稳定性，采用标准 costmap obstacle 方式，不启用 `CostmapToDynamicObstacles` 动态转换线程
 
 对应参数文件：
 
 - `rm_navi/rm_navigation/navi/params/nav2_params.yaml`
 - `rm_navi/rm_navigation/navi/params/nav2_params_dwb_baseline.yaml`
 - `rm_navi/rm_navigation/navi/params/nav2_params_dwb_risk_only.yaml`
+- `rm_navi/rm_navigation/navi/params/nav2_params_teb.yaml`
 
 对应仿真启动脚本：
 
@@ -334,7 +357,32 @@ cd /home/lraina/auto_shao/src
 ./sim_nav.sh
 ./sim_nav_dwb_baseline.sh
 ./sim_nav_dwb_risk_only.sh
+./sim_nav_teb.sh
 ```
+
+新增的多场景预启动与导航脚本为：
+
+```bash
+./sim_pre_narrow.sh
+./sim_pre_random.sh
+./sim_nav_narrow.sh
+./sim_nav_teb_narrow.sh
+```
+
+它们的分工是：
+
+- `sim_pre_narrow.sh`
+  - 启动 `narrow_corridor.world`
+  - 对应狭窄走廊场景
+- `sim_pre_random.sh`
+  - 启动 `random_crowd.world`
+  - 对应开阔场中的多障碍随机乱步场景
+- `sim_nav_narrow.sh`
+  - 使用 `narrow_corridor_map.yaml`
+  - 供当前 `Full` 方法在狭窄走廊场景中评测
+- `sim_nav_teb_narrow.sh`
+  - 使用同一张走廊地图
+  - 供 `TEB` 在狭窄走廊场景中做额外对照
 
 推荐对比关系：
 
@@ -342,6 +390,8 @@ cd /home/lraina/auto_shao/src
   - 验证自定义动态障碍 critic 是否有效
 - `Full vs RiskOnly`
   - 验证后续加入的“抑制犹豫/促进脱困”机制是否有效
+- `Full vs TEB`
+  - 验证所提 DWB 增强方法相对主流动态避障局部规划器的通过表现与计算开销优势
 
 #### 7.1 自动化消融评测脚本
 
@@ -351,17 +401,19 @@ cd /home/lraina/auto_shao/src
 
 该脚本的用途是：
 
-- 在 Gazebo 仿真中自动运行三组消融实验
+- 在 Gazebo 仿真中自动运行三组 DWB 消融实验
 - 对每组配置重复执行多轮导航任务
 - 自动统计论文定量对比所需指标
 - 直接导出可用于论文表格整理的 CSV 文件
+
+如果需要把 `TEB` 也加入同一套自动流程，可通过命令行参数追加这一组对照基线。
 
 该脚本对应的实验目的，是验证以下两个问题：
 
 - `Baseline -> RiskOnly -> Full` 这三组方法的性能差异是否稳定存在
 - 你后续增加的“犹豫抑制、侧向逃逸、方向翻转惩罚”等工程增强项，是否确实改善了动态交互场景中的局部控制表现
 
-自动评测脚本当前调用的实验分组为：
+自动评测脚本默认调用的实验分组为：
 
 - `Group A / Baseline`
   - 调用 `./sim_nav_dwb_baseline.sh`
@@ -372,6 +424,13 @@ cd /home/lraina/auto_shao/src
 - `Group C / Full`
   - 调用 `./sim_nav.sh`
   - 使用当前全功能版本
+
+可选附加分组为：
+
+- `Group D / TEB`
+  - 调用 `./sim_nav_teb.sh`
+  - 使用 `teb_local_planner` 作为局部控制器
+  - 用于和 `Full` 做跨控制器对照，而不是替代前三组 DWB 消融组
 
 当前默认实验设置为：
 
@@ -434,12 +493,18 @@ python3 run_ablation_eval.py --trials-per-group 1
 python3 run_ablation_eval.py --trials-per-group 50
 ```
 
+如果要把 `TEB` 一并纳入对照，可运行：
+
+```bash
+python3 run_ablation_eval.py --trials-per-group 50 --include-teb
+```
+
 脚本默认输出目录为：
 
 - `ablation_eval_output/ablation_trials.csv`
 - `ablation_eval_output/ablation_results.csv`
-- `ablation_eval_output/logs/<group>/trial_xxx/sim_pre`
-- `ablation_eval_output/logs/<group>/trial_xxx/nav`
+- `ablation_eval_output/logs/ablation/<group>/trial_xxx/sim_pre`
+- `ablation_eval_output/logs/ablation/<group>/trial_xxx/nav`
 其中：
 
 - `ablation_trials.csv`
@@ -448,7 +513,7 @@ python3 run_ablation_eval.py --trials-per-group 50
 - `ablation_results.csv`
   - 保存按实验组汇总后的均值与方差
   - 可直接用于整理论文中的定量对比表
-- `logs/<group>/trial_xxx/...`
+- `logs/ablation/<group>/trial_xxx/...`
   - 保存每一轮独立 trial 的启动与导航日志
   - 当某一轮出现 `aborted`、`timeout` 或异常成功时，可直接对照该轮日志核查
 
@@ -467,6 +532,91 @@ python3 run_ablation_eval.py --trials-per-group 50
 
 - 一个面向论文消融实验的自动化评测工具
 - 用于批量生成 `Baseline / RiskOnly / Full` 三组方法的可复现实验数据
+- 在需要时也可追加 `TEB` 组，生成跨局部规划器对照数据
+
+#### 7.1.1 多场景鲁棒性评测
+
+除了原始十字交汇 `dynamic_test` 场景之外，当前还补充了两个额外场景，用于支撑论文里 `Performance in Multi-Scenarios` 这一列：
+
+- `narrow_corridor`
+  - 机器人在狭窄走廊内从 `(-4.0, 0.0)` 导航到 `(4.0, 0.0)`
+  - 前方有单个动态障碍沿走廊来回运动
+  - 用于验证空间受限时是否出现撞墙、僵住或无法超车
+- `random_crowd`
+  - 机器人仍从 `(-4.0, 0.0)` 导航到 `(4.0, 0.0)`
+  - 场中有 `obs1 ~ obs5` 五个圆柱障碍按固定随机种子乱步
+  - 当前障碍运动已扩展到近全场范围，并在运动层加入了邻近避让与边界回避，尽量减少障碍之间的相撞穿模
+  - 用于验证在多动态体干扰下的总体通过稳定性
+
+这两个场景仍然遵循当前仿真的统一触发逻辑：
+
+- Gazebo 场景加载完成后，障碍物默认先静止
+- 当第一次收到导航目标或非零 `/cmd_vel` 后，`obstacle_mover.py` 才开始运动
+- 每轮实验前都会调用 `reset_motion`，把障碍重新置回“等待首次目标触发”的状态
+
+如果只想运行多场景鲁棒性测试，而不重复执行 50 次 DWB 消融，可直接运行：
+
+```bash
+python3 run_ablation_eval.py --skip-ablation --run-multi-scenario --multi-scenario-trials 20
+```
+
+如果希望把 `TEB` 也一并加入多场景对照，可运行：
+
+```bash
+python3 run_ablation_eval.py --skip-ablation --run-multi-scenario --multi-scenario-trials 20 --include-teb
+```
+
+如果你希望把“原始消融 + 多场景鲁棒性”一次性全跑完，也可以直接追加同一个开关：
+
+```bash
+python3 run_ablation_eval.py --trials-per-group 50 --run-multi-scenario --multi-scenario-trials 20
+```
+
+多场景模式的输出文件为：
+
+- `ablation_eval_output/multi_scenario_trials.csv`
+- `ablation_eval_output/multi_scenario_results.csv`
+- `ablation_eval_output/logs/multi_scenario/<scene>/<group>/trial_xxx/sim_pre`
+- `ablation_eval_output/logs/multi_scenario/<scene>/<group>/trial_xxx/nav`
+
+其中：
+
+- `multi_scenario_trials.csv`
+  - 保存每个场景、每个方法、每一轮的原始结果
+- `multi_scenario_results.csv`
+  - 以 `scenario + group` 为索引统计汇总指标
+  - 当前最主要用于提取各场景的 `success_rate_pct_mean`
+- `logs/multi_scenario/...`
+  - 用于排查某个场景下的失败轮次
+  - 例如检查狭窄走廊里是否是全局路径、局部代价地图或动态障碍干扰导致失败
+
+从论文写作角度看，这一部分实验的目的不是重新做一整套大规模消融，而是：
+
+- 证明当前 `Full` 方法不只在十字交汇场景中有效
+- 证明它在空间受限和多障碍扰动下仍具备一定通过能力
+- 如果追加 `TEB`，还能进一步补充跨控制器的场景泛化对照
+
+#### 7.2 延迟统计与 TEB 对照
+
+为了支撑论文中的计算开销对比，当前代码里已经增加了运行时延迟日志：
+
+- `predictive_tracker`
+  - 周期性输出单帧跟踪耗时统计
+- `tcpa_dcpa_critic`
+  - 周期性输出单次 critic 评分耗时统计
+- `teb_local_planner`
+  - 周期性输出单次局部规划调用耗时统计
+
+这些日志主要用于填写论文中的 `Computational Overhead` 或 `Table III` 一类表格，用来回答两个问题：
+
+- 你的前端跟踪与 DWB critic 是否足够轻量
+- 相比 `TEB`，当前方法是否在保持通过能力的同时显著降低控制计算延迟
+
+其中 `TEB` 组当前的定位是：
+
+- 一个额外的强基线
+- 用于和 `Full` 做“成功率 / 平均速度 / 延迟开销”三方面对照
+- 不替代 `Baseline / RiskOnly / Full` 这一组三段式消融链路
 
 ### 8. 当前版本解决的问题与仍存在的问题
 
@@ -475,16 +625,40 @@ python3 run_ablation_eval.py --trials-per-group 50
 - 幽灵动态障碍标记相比早期版本明显减少
 - 纯 TCPA/DCPA 导致的“原地僵住”现象有所缓解
 - 障碍从左右来袭时，机器人已经能够出现更明显的横移规避行为
+- 对“前方横穿障碍物”场景，机器人已开始出现更明确的“绕到障碍物后方通过”的趋势
 - 跟踪结果发布频率提升后，DWB 对动态障碍速度趋势的利用更稳定
 - 自动化消融实验脚本已经能够稳定输出按 trial 隔离的日志与统计结果
+- 多场景鲁棒性测试入口已经补齐，能够直接评测 `narrow_corridor` 与 `random_crowd`
 - 早期评测中出现过的“伪成功”与日志串轮问题已经被修正
 
 #### 8.2 当前仍需继续优化的问题
 
 - 仍存在一定比例的误识别动态障碍
 - 障碍转向时，tracker 仍可能短时掉跟踪
-- 某些侧向来袭场景下，机器人仍可能出现前后犹豫
+- 某些侧向来袭场景下，机器人仍可能出现轻微犹豫
+- 在个别前方横穿场景下，机器人仍可能短暂出现“弱跟随”现象
 - critic 参数目前仍有较强任务场景依赖性
+
+#### 8.3 当前版本是否适合继续跑实验
+
+可以。
+
+但需要区分两种情况：
+
+- 如果你当前是继续完成“这一版改进算法”的主实验或补充实验，那么可以直接基于当前版本继续跑
+- 如果你想和之前已经保存结果的旧版 `Full` 做严格一一对应对比，那么需要把本次修改视为一个新的 `Full` 版本，重新完整跑一轮实验
+
+原因是：
+
+- 本次更新已经实质性改变了局部控制策略
+- 新增了 `rear_passing_penalty` 与 `swept_corridor_penalty`
+- 它们会直接影响前方横穿场景下的轨迹选择结果
+
+因此更稳妥的做法是：
+
+- 从现在开始冻结这一版参数与代码
+- 后续所有正式统计都基于这一固定版本完成
+- 不再把这版结果与更早未包含“后穿优先 / 扫掠走廊偏好”的 `Full` 结果混合统计
 
 因此，当前系统更适合表述为：
 
@@ -654,6 +828,7 @@ C = C_risk + C_hesitation + C_escape + C_progress + C_alignment + C_flip
 - 机器人为全向移动底盘，不考虑原地旋转规避
 - 动态障碍识别链为 `Point-LIO -> linefit -> predictive_tracker`
 - 障碍物在首次下发导航目标后才开始运动，以支持单变量消融实验
+- 除主十字交汇场景外，还补充了 `narrow_corridor` 与 `random_crowd` 两个鲁棒性测试场景
 
 如果你想更严谨一点，可以补一句区分：
 
@@ -696,6 +871,13 @@ C = C_risk + C_hesitation + C_escape + C_progress + C_alignment + C_flip
   - 可以定义为短时间窗口内 `cmd_vel` 方向反复翻转次数
 - Tracking availability
   - 如 `/tracked_obstacles` 在动态交互段内的有效发布率
+
+另外建议单独加一个简短的小表或附加列：
+
+- `Performance in Multi-Scenarios`
+  - 记录 `narrow_corridor` 与 `random_crowd` 两个场景下的成功率
+  - 这一部分不必再跑完整三组消融，至少给出 `Full` 的成功率即可
+  - 如果你想进一步体现优势，也可以再补 `TEB` 的同场景成功率
 
 如果你想突出“平滑性”，与其直接写 jerk，不如同时加一个更贴近你问题本身的指标：
 

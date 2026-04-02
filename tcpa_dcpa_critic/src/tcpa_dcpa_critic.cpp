@@ -1,6 +1,7 @@
 #include "tcpa_dcpa_critic/tcpa_dcpa_critic.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <limits>
 #include <memory>
@@ -69,6 +70,10 @@ void TCPADCPACritic::onInit()
   nav2_util::declare_parameter_if_not_declared(
     node, critic_ns + ".rear_tail_margin", rclcpp::ParameterValue(0.2));
   nav2_util::declare_parameter_if_not_declared(
+    node, critic_ns + ".latency_stats_enabled", rclcpp::ParameterValue(false));
+  nav2_util::declare_parameter_if_not_declared(
+    node, critic_ns + ".latency_report_interval", rclcpp::ParameterValue(500));
+  nav2_util::declare_parameter_if_not_declared(
     node, critic_ns + ".direction_flip_penalty_scale", rclcpp::ParameterValue(0.8));
   nav2_util::declare_parameter_if_not_declared(
     node, critic_ns + ".direction_flip_speed_threshold", rclcpp::ParameterValue(0.2));
@@ -107,6 +112,10 @@ void TCPADCPACritic::onInit()
     critic_ns + ".swept_corridor_half_width", swept_corridor_half_width_);
   node->get_parameter(
     critic_ns + ".rear_tail_margin", rear_tail_margin_);
+  node->get_parameter(
+    critic_ns + ".latency_stats_enabled", latency_stats_enabled_);
+  node->get_parameter(
+    critic_ns + ".latency_report_interval", latency_report_interval_);
   node->get_parameter(critic_ns + ".direction_flip_penalty_scale", direction_flip_penalty_scale_);
   node->get_parameter(critic_ns + ".direction_flip_speed_threshold", direction_flip_speed_threshold_);
 
@@ -152,6 +161,7 @@ void TCPADCPACritic::onInit()
   swept_corridor_penalty_scale_ = std::max(0.0, swept_corridor_penalty_scale_);
   swept_corridor_half_width_ = std::max(0.0, swept_corridor_half_width_);
   rear_tail_margin_ = std::max(0.0, rear_tail_margin_);
+  latency_report_interval_ = std::max(1, latency_report_interval_);
   direction_flip_penalty_scale_ = std::max(0.0, direction_flip_penalty_scale_);
   direction_flip_speed_threshold_ = std::max(0.0, direction_flip_speed_threshold_);
 
@@ -186,6 +196,7 @@ bool TCPADCPACritic::prepare(
 
 double TCPADCPACritic::scoreTrajectory(const dwb_msgs::msg::Trajectory2D & traj)
 {
+  const auto start_time = std::chrono::steady_clock::now();
   const auto obstacles = getObstaclesSnapshot();
   if (obstacles.empty() || traj.poses.empty() || !obstaclesAreFresh()) {
     return 0.0;
@@ -381,7 +392,31 @@ double TCPADCPACritic::scoreTrajectory(const dwb_msgs::msg::Trajectory2D & traj)
     }
   }
 
-  return total_cost * scale_;
+  const double final_cost = total_cost * scale_;
+  if (latency_stats_enabled_) {
+    auto node = node_.lock();
+    if (node) {
+      const auto end_time = std::chrono::steady_clock::now();
+      const double elapsed_ms =
+        std::chrono::duration<double, std::milli>(end_time - start_time).count();
+      latency_sample_count_ += 1;
+      latency_accumulator_ms_ += elapsed_ms;
+      latency_max_ms_ = std::max(latency_max_ms_, elapsed_ms);
+      if (latency_sample_count_ % static_cast<std::size_t>(latency_report_interval_) == 0) {
+        const double average_ms = latency_accumulator_ms_ /
+          static_cast<double>(latency_sample_count_);
+        RCLCPP_INFO(
+          node->get_logger(),
+          "TCPADCPA score latency over %zu calls: avg=%.4f ms max=%.4f ms",
+          latency_sample_count_, average_ms, latency_max_ms_);
+        latency_sample_count_ = 0;
+        latency_accumulator_ms_ = 0.0;
+        latency_max_ms_ = 0.0;
+      }
+    }
+  }
+
+  return final_cost;
 }
 
 void TCPADCPACritic::reset()

@@ -1,6 +1,7 @@
 #ifndef TCPA_DCPA_CRITIC__TCPA_DCPA_CRITIC_HPP_
 #define TCPA_DCPA_CRITIC__TCPA_DCPA_CRITIC_HPP_
 
+#include <cstddef>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -67,6 +68,11 @@ private:
   double rear_tail_margin_{0.2};
   double direction_flip_penalty_scale_{0.8};
   double direction_flip_speed_threshold_{0.2};
+  bool latency_stats_enabled_{false};
+  int latency_report_interval_{500};
+  std::size_t latency_sample_count_{0};
+  double latency_accumulator_ms_{0.0};
+  double latency_max_ms_{0.0};
   double current_velocity_x_{0.0};
   double current_velocity_y_{0.0};
   double goal_direction_x_{0.0};

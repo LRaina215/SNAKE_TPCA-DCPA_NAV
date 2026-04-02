@@ -43,12 +43,11 @@ except ImportError:  # pragma: no cover - depends on local ROS build
 
 
 ROBOT_MODEL_NAME = "tcpa_robot"
-DYNAMIC_OBSTACLE_NAMES = ("obs1", "obs2")
-TRACKED_ENTITY_NAMES = (ROBOT_MODEL_NAME, *DYNAMIC_OBSTACLE_NAMES)
 TRIAL_CLEANUP_PATTERNS = (
     "ros2 launch tcpa_sim_env sim_launch.py",
     "ros2 launch navi bringup_dwb_baseline_launch.py",
     "ros2 launch navi bringup_dwb_risk_only_launch.py",
+    "ros2 launch navi bringup_teb_launch.py",
     "ros2 launch nav2_bringup navigation_launch.py",
     "ros2 launch point_lio mapping_mid360.launch.py",
     "ros2 launch predictive_tracker dynamic_tracker.launch.py",
@@ -66,8 +65,67 @@ class ExperimentGroup:
     script: str
 
 
+@dataclass(frozen=True)
+class EntityConfig:
+    name: str
+    x: float
+    y: float
+    z: float
+    qx: float = 0.0
+    qy: float = 0.0
+    qz: float = 0.0
+    qw: float = 1.0
+    vx: float = 0.0
+    vy: float = 0.0
+    vz: float = 0.0
+    wx: float = 0.0
+    wy: float = 0.0
+    wz: float = 0.0
+
+    def to_snapshot(self) -> "EntitySnapshot":
+        return EntitySnapshot(
+            name=self.name,
+            x=self.x,
+            y=self.y,
+            z=self.z,
+            qx=self.qx,
+            qy=self.qy,
+            qz=self.qz,
+            qw=self.qw,
+            vx=self.vx,
+            vy=self.vy,
+            vz=self.vz,
+            wx=self.wx,
+            wy=self.wy,
+            wz=self.wz,
+        )
+
+
+@dataclass(frozen=True)
+class ScenarioConfig:
+    name: str
+    pre_script: str
+    goal_x: float
+    goal_y: float
+    entity_configs: Tuple[EntityConfig, ...]
+    dynamic_obstacle_names: Tuple[str, ...]
+    analytic_clearance_mode: Optional[str] = None
+
+    @property
+    def entity_names(self) -> Tuple[str, ...]:
+        return tuple(entity.name for entity in self.entity_configs)
+
+    @property
+    def robot_initial_xy(self) -> Tuple[float, float]:
+        for entity in self.entity_configs:
+            if entity.name == ROBOT_MODEL_NAME:
+                return (entity.x, entity.y)
+        raise KeyError(f"Scenario {self.name} is missing {ROBOT_MODEL_NAME}")
+
+
 @dataclass
 class TrialResult:
+    scenario: str
     group: str
     trial_index: int
     success: int
@@ -143,6 +201,15 @@ class AblationEvaluator(Node):
         super().__init__("ablation_evaluator")
         self.args = args
         self._subscriptions = []
+        self.current_scenario = build_dynamic_test_scenario(args)
+        self.current_dynamic_obstacle_names = self.current_scenario.dynamic_obstacle_names
+        self.current_entity_names = self.current_scenario.entity_names
+        self.current_entity_configs = {
+            entity.name: entity for entity in self.current_scenario.entity_configs
+        }
+        self.current_goal_x = self.current_scenario.goal_x
+        self.current_goal_y = self.current_scenario.goal_y
+        self.current_analytic_clearance_mode = self.current_scenario.analytic_clearance_mode
 
         self.goal_client = ActionClient(self, NavigateToPose, args.goal_action)
         goal_topics = []
@@ -249,6 +316,18 @@ class AblationEvaluator(Node):
         self._obstacle_motion_start_wall: Optional[float] = None
         self._robot_xml: Optional[str] = None
 
+    def configure_scenario(self, scenario: ScenarioConfig) -> None:
+        self.current_scenario = scenario
+        self.current_dynamic_obstacle_names = scenario.dynamic_obstacle_names
+        self.current_entity_names = scenario.entity_names
+        self.current_entity_configs = {
+            entity.name: entity for entity in scenario.entity_configs
+        }
+        self.current_goal_x = scenario.goal_x
+        self.current_goal_y = scenario.goal_y
+        self.current_analytic_clearance_mode = scenario.analytic_clearance_mode
+        self.clear_stack_runtime_state()
+
     def wait_for_pre_stack_ready(self, timeout_s: float) -> None:
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
@@ -290,9 +369,9 @@ class AblationEvaluator(Node):
         self._initial_entity_snapshots = {}
         self._obstacle_motion_start_wall = None
 
-    def wait_for_entity_states_ready(self, timeout_s: float, names: Sequence[str] = TRACKED_ENTITY_NAMES) -> None:
+    def wait_for_entity_states_ready(self, timeout_s: float, names: Optional[Sequence[str]] = None) -> None:
         deadline = time.monotonic() + timeout_s
-        required_names = tuple(names)
+        required_names = tuple(names) if names is not None else self.current_entity_names
         while time.monotonic() < deadline:
             rclpy.spin_once(self, timeout_sec=0.1)
             if not self._have_model_states:
@@ -307,7 +386,7 @@ class AblationEvaluator(Node):
             self.wait_for_entity_states_ready(timeout_s)
             self._initial_entity_snapshots = {
                 name: self._latest_entity_snapshots[name]
-                for name in TRACKED_ENTITY_NAMES
+                for name in self.current_entity_names
             }
             summary = ", ".join(
                 f"{name}=({snapshot.x:.2f}, {snapshot.y:.2f}, {snapshot.z:.2f})"
@@ -375,7 +454,7 @@ class AblationEvaluator(Node):
             return self._respawn_robot_to_initial_state()
 
         success = True
-        for name in TRACKED_ENTITY_NAMES:
+        for name in self.current_entity_names:
             snapshot = self._initial_entity_snapshots.get(name)
             if snapshot is None:
                 self.get_logger().warn(f"Missing initial snapshot for entity {name}")
@@ -581,6 +660,7 @@ class AblationEvaluator(Node):
     @staticmethod
     def _make_failed_result(trial_index: int, outcome: str) -> TrialResult:
         return TrialResult(
+            scenario="",
             group="",
             trial_index=trial_index,
             success=0,
@@ -594,54 +674,8 @@ class AblationEvaluator(Node):
 
     def _build_fallback_initial_entity_snapshots(self) -> Dict[str, EntitySnapshot]:
         return {
-            ROBOT_MODEL_NAME: EntitySnapshot(
-                name=ROBOT_MODEL_NAME,
-                x=self.args.robot_initial_x,
-                y=self.args.robot_initial_y,
-                z=self.args.robot_initial_z,
-                qx=0.0,
-                qy=0.0,
-                qz=0.0,
-                qw=1.0,
-                vx=0.0,
-                vy=0.0,
-                vz=0.0,
-                wx=0.0,
-                wy=0.0,
-                wz=0.0,
-            ),
-            "obs1": EntitySnapshot(
-                name="obs1",
-                x=self.args.obs1_initial_x,
-                y=self.args.obs1_initial_y,
-                z=self.args.obs1_initial_z,
-                qx=0.0,
-                qy=0.0,
-                qz=0.0,
-                qw=1.0,
-                vx=0.0,
-                vy=0.0,
-                vz=0.0,
-                wx=0.0,
-                wy=0.0,
-                wz=0.0,
-            ),
-            "obs2": EntitySnapshot(
-                name="obs2",
-                x=self.args.obs2_initial_x,
-                y=self.args.obs2_initial_y,
-                z=self.args.obs2_initial_z,
-                qx=0.0,
-                qy=0.0,
-                qz=0.0,
-                qw=1.0,
-                vx=0.0,
-                vy=0.0,
-                vz=0.0,
-                wx=0.0,
-                wy=0.0,
-                wz=0.0,
-            ),
+            entity.name: entity.to_snapshot()
+            for entity in self.current_scenario.entity_configs
         }
 
     def run_trial(self, trial_index: int, perform_reset: bool = True) -> TrialResult:
@@ -708,7 +742,10 @@ class AblationEvaluator(Node):
                     robot_xy = self._current_robot_xy()
                     goal_distance = float("inf")
                     if robot_xy is not None:
-                        goal_distance = math.hypot(robot_xy[0] - self.args.goal_x, robot_xy[1] - self.args.goal_y)
+                        goal_distance = math.hypot(
+                            robot_xy[0] - self.current_goal_x,
+                            robot_xy[1] - self.current_goal_y,
+                        )
 
                     if goal_distance > self.args.final_goal_tolerance_m:
                         success = 0
@@ -732,8 +769,8 @@ class AblationEvaluator(Node):
         pose = PoseStamped()
         pose.header.frame_id = self.args.goal_frame
         pose.header.stamp = self.get_clock().now().to_msg()
-        pose.pose.position.x = self.args.goal_x
-        pose.pose.position.y = self.args.goal_y
+        pose.pose.position.x = self.current_goal_x
+        pose.pose.position.y = self.current_goal_y
         pose.pose.orientation.w = 1.0
         return pose
 
@@ -779,6 +816,7 @@ class AblationEvaluator(Node):
         else:
             min_clearance = self._min_clearance
         return TrialResult(
+            scenario="",
             group="",
             trial_index=trial_index,
             success=success,
@@ -838,7 +876,7 @@ class AblationEvaluator(Node):
 
         truth_obstacles = {
             obstacle_name: entity_snapshots[obstacle_name].position_xy()
-            for obstacle_name in DYNAMIC_OBSTACLE_NAMES
+            for obstacle_name in self.current_dynamic_obstacle_names
             if obstacle_name in entity_snapshots
         }
         if truth_obstacles:
@@ -877,6 +915,9 @@ class AblationEvaluator(Node):
                     self._collision_detected = True
 
     def _get_analytic_obstacle_positions(self, now_wall: float) -> List[Tuple[float, float]]:
+        if self.current_analytic_clearance_mode != "dynamic_test":
+            return []
+
         obs1_snapshot = self._initial_entity_snapshots.get("obs1")
         obs2_snapshot = self._initial_entity_snapshots.get("obs2")
         if obs1_snapshot is None or obs2_snapshot is None:
@@ -929,6 +970,81 @@ class AblationEvaluator(Node):
             GoalStatus.STATUS_ABORTED: "aborted",
         }
         return mapping.get(status, f"status_{status}")
+
+
+def build_dynamic_test_scenario(args: argparse.Namespace) -> ScenarioConfig:
+    return ScenarioConfig(
+        name="dynamic_test",
+        pre_script="sim_pre.sh",
+        goal_x=args.goal_x,
+        goal_y=args.goal_y,
+        entity_configs=(
+            EntityConfig(ROBOT_MODEL_NAME, args.robot_initial_x, args.robot_initial_y, args.robot_initial_z),
+            EntityConfig("obs1", args.obs1_initial_x, args.obs1_initial_y, args.obs1_initial_z),
+            EntityConfig("obs2", args.obs2_initial_x, args.obs2_initial_y, args.obs2_initial_z),
+        ),
+        dynamic_obstacle_names=("obs1", "obs2"),
+        analytic_clearance_mode="dynamic_test",
+    )
+
+
+def build_multi_scenarios(args: argparse.Namespace) -> List[ScenarioConfig]:
+    return [
+        ScenarioConfig(
+            name="narrow_corridor",
+            pre_script="sim_pre_narrow.sh",
+            goal_x=args.goal_x,
+            goal_y=args.goal_y,
+            entity_configs=(
+                EntityConfig(ROBOT_MODEL_NAME, args.robot_initial_x, args.robot_initial_y, args.robot_initial_z),
+                EntityConfig("obs1", 2.4, 0.0, 0.75),
+            ),
+            dynamic_obstacle_names=("obs1",),
+        ),
+        ScenarioConfig(
+            name="random_crowd",
+            pre_script="sim_pre_random.sh",
+            goal_x=args.goal_x,
+            goal_y=args.goal_y,
+            entity_configs=(
+                EntityConfig(ROBOT_MODEL_NAME, args.robot_initial_x, args.robot_initial_y, args.robot_initial_z),
+                EntityConfig("obs1", -1.2, -2.1, 0.75),
+                EntityConfig("obs2", 1.7, -1.4, 0.75),
+                EntityConfig("obs3", -0.4, 1.8, 0.75),
+                EntityConfig("obs4", 2.0, 2.2, 0.75),
+                EntityConfig("obs5", -2.3, 0.9, 0.75),
+            ),
+            dynamic_obstacle_names=("obs1", "obs2", "obs3", "obs4", "obs5"),
+        ),
+    ]
+
+
+def build_ablation_groups(args: argparse.Namespace) -> List[ExperimentGroup]:
+    groups = [
+        ExperimentGroup("Baseline", "sim_nav_dwb_baseline.sh"),
+        ExperimentGroup("RiskOnly", "sim_nav_dwb_risk_only.sh"),
+        ExperimentGroup("Full", "sim_nav.sh"),
+    ]
+    if args.include_teb:
+        groups.append(ExperimentGroup("TEB", "sim_nav_teb.sh"))
+    return groups
+
+
+def build_multi_scenario_groups(args: argparse.Namespace) -> List[ExperimentGroup]:
+    groups = [ExperimentGroup("Full", "sim_nav.sh")]
+    if args.include_teb:
+        groups.append(ExperimentGroup("TEB", "sim_nav_teb.sh"))
+    return groups
+
+
+def resolve_nav_script_for_scenario(group: ExperimentGroup, scenario: ScenarioConfig) -> str:
+    if scenario.name == "narrow_corridor":
+        if group.name == "Full":
+            return "sim_nav_narrow.sh"
+        if group.name == "TEB":
+            return "sim_nav_teb_narrow.sh"
+        raise ValueError(f"Group {group.name} is not configured for scenario {scenario.name}")
+    return group.script
 
 
 def launch_stack(script_path: Path, log_dir: Path) -> List[int]:
@@ -1005,8 +1121,17 @@ def cleanup_active_stacks(pre_pids: Sequence[int], nav_pids: Sequence[int], sett
     time.sleep(settle_s)
 
 
-def build_trial_log_dirs(output_dir: Path, group_name: str, trial_index: int) -> Dict[str, Path]:
-    trial_root = output_dir / "logs" / group_name.lower() / f"trial_{trial_index:03d}"
+def build_trial_log_dirs(
+    output_dir: Path,
+    group_name: str,
+    trial_index: int,
+    suite_name: str = "ablation",
+    scenario_name: Optional[str] = None,
+) -> Dict[str, Path]:
+    trial_root = output_dir / "logs" / suite_name
+    if scenario_name:
+        trial_root = trial_root / scenario_name
+    trial_root = trial_root / group_name.lower() / f"trial_{trial_index:03d}"
     return {
         "trial_root": trial_root,
         "sim_pre": trial_root / "sim_pre",
@@ -1014,12 +1139,19 @@ def build_trial_log_dirs(output_dir: Path, group_name: str, trial_index: int) ->
     }
 
 
-def start_pre_stack(node: AblationEvaluator, args: argparse.Namespace, pre_script: Path, log_dir: Path) -> List[int]:
+def start_pre_stack(
+    node: AblationEvaluator,
+    args: argparse.Namespace,
+    scenario: ScenarioConfig,
+    pre_script: Path,
+    log_dir: Path,
+) -> List[int]:
+    node.configure_scenario(scenario)
     node.clear_stack_runtime_state()
     pre_pids = launch_stack(pre_script, log_dir)
     node.wait_for_pre_stack_ready(args.stack_ready_timeout_s)
     node.wait_for_robot_near_pose(
-        (args.robot_initial_x, args.robot_initial_y),
+        scenario.robot_initial_xy,
         args.initial_pose_tolerance_m,
         args.initial_pose_timeout_s,
     )
@@ -1033,34 +1165,196 @@ def start_group_stack(
     args: argparse.Namespace,
     workspace_src: Path,
     group: ExperimentGroup,
+    scenario: ScenarioConfig,
     log_dir: Path,
 ) -> List[int]:
-    nav_pids = launch_stack(workspace_src / group.script, log_dir)
+    nav_script = resolve_nav_script_for_scenario(group, scenario)
+    nav_pids = launch_stack(workspace_src / nav_script, log_dir)
     node.wait_for_nav_stack_ready(args.stack_ready_timeout_s)
     node._wait_for_pose_update(args.group_warmup_s)
     return nav_pids
 
 
-def summarize_results(results_df: pd.DataFrame) -> pd.DataFrame:
+def summarize_results_by_columns(results_df: pd.DataFrame, group_columns: Sequence[str]) -> pd.DataFrame:
+    if results_df.empty:
+        return pd.DataFrame()
+
     rows = []
-    grouped = results_df.groupby("group", sort=False)
-    for group_name, group_df in grouped:
+    grouped = results_df.groupby(list(group_columns), sort=False)
+    for group_key, group_df in grouped:
+        if not isinstance(group_key, tuple):
+            group_key = (group_key,)
         success_pct = group_df["success"] * 100.0
-        row = {
-            "group": group_name,
-            "success_rate_pct_mean": success_pct.mean(),
-            "success_rate_pct_var": success_pct.var(ddof=1),
-            "mean_navigation_time_s_mean": group_df["navigation_time_s"].mean(),
-            "mean_navigation_time_s_var": group_df["navigation_time_s"].var(ddof=1),
-            "average_translational_speed_mps_mean": group_df["average_speed_mps"].mean(),
-            "average_translational_speed_mps_var": group_df["average_speed_mps"].var(ddof=1),
-            "minimum_clearance_m_mean": group_df["min_clearance_m"].mean(),
-            "minimum_clearance_m_var": group_df["min_clearance_m"].var(ddof=1),
-            "velocity_sign_flip_count_mean": group_df["velocity_sign_flip_count"].mean(),
-            "velocity_sign_flip_count_var": group_df["velocity_sign_flip_count"].var(ddof=1),
-        }
+        row = {column: value for column, value in zip(group_columns, group_key)}
+        row.update(
+            {
+                "success_rate_pct_mean": success_pct.mean(),
+                "success_rate_pct_var": success_pct.var(ddof=1),
+                "mean_navigation_time_s_mean": group_df["navigation_time_s"].mean(),
+                "mean_navigation_time_s_var": group_df["navigation_time_s"].var(ddof=1),
+                "average_translational_speed_mps_mean": group_df["average_speed_mps"].mean(),
+                "average_translational_speed_mps_var": group_df["average_speed_mps"].var(ddof=1),
+                "minimum_clearance_m_mean": group_df["min_clearance_m"].mean(),
+                "minimum_clearance_m_var": group_df["min_clearance_m"].var(ddof=1),
+                "velocity_sign_flip_count_mean": group_df["velocity_sign_flip_count"].mean(),
+                "velocity_sign_flip_count_var": group_df["velocity_sign_flip_count"].var(ddof=1),
+            }
+        )
         rows.append(row)
     return pd.DataFrame(rows)
+
+
+def summarize_results(results_df: pd.DataFrame) -> pd.DataFrame:
+    return summarize_results_by_columns(results_df, ("group",))
+
+
+def run_experiment_suite(
+    node: AblationEvaluator,
+    args: argparse.Namespace,
+    workspace_src: Path,
+    scenario: ScenarioConfig,
+    groups: Sequence[ExperimentGroup],
+    trials_per_group: int,
+    output_dir: Path,
+    suite_name: str,
+) -> List[TrialResult]:
+    pre_script = workspace_src / scenario.pre_script
+    if not pre_script.exists():
+        raise FileNotFoundError(f"Missing pre-stack script: {pre_script}")
+
+    for group in groups:
+        script_path = workspace_src / resolve_nav_script_for_scenario(group, scenario)
+        if not script_path.exists():
+            raise FileNotFoundError(f"Missing group launch script: {script_path}")
+
+    pre_pids: List[int] = []
+    nav_pids: List[int] = []
+    trial_results: List[TrialResult] = []
+
+    try:
+        if args.reuse_running_stacks:
+            cleanup_active_stacks([], [], args.inter_trial_cleanup_s)
+            shared_pre_logs = output_dir / "logs" / suite_name
+            if scenario.name != "dynamic_test":
+                shared_pre_logs = shared_pre_logs / scenario.name
+            shared_pre_logs = shared_pre_logs / "shared" / "sim_pre"
+            shared_pre_logs.mkdir(parents=True, exist_ok=True)
+            pre_pids = start_pre_stack(node, args, scenario, pre_script, shared_pre_logs)
+
+            for group in groups:
+                node.get_logger().info(f"[{scenario.name}] Starting group {group.name}")
+                group_shared_logs = output_dir / "logs" / suite_name
+                if scenario.name != "dynamic_test":
+                    group_shared_logs = group_shared_logs / scenario.name
+                group_shared_logs = group_shared_logs / group.name.lower() / "shared_nav"
+                group_shared_logs.mkdir(parents=True, exist_ok=True)
+                nav_pids = start_group_stack(node, args, workspace_src, group, scenario, group_shared_logs)
+
+                for trial_index in range(1, trials_per_group + 1):
+                    node.get_logger().info(
+                        f"[{scenario.name}][{group.name}] Trial {trial_index}/{trials_per_group}"
+                    )
+                    restart_count = 0
+                    result = node.run_trial(trial_index, perform_reset=True)
+                    while (
+                        result.outcome in {"reset_failed", "startup_failed"}
+                        and args.restart_on_reset_failure
+                        and restart_count < args.max_trial_restarts
+                    ):
+                        restart_count += 1
+                        node.get_logger().warn(
+                            f"[{scenario.name}][{group.name}] Trial {trial_index} failed during setup "
+                            f"({result.outcome}); restarting stacks ({restart_count}/{args.max_trial_restarts})."
+                        )
+                        cleanup_active_stacks(pre_pids, nav_pids, args.inter_trial_cleanup_s)
+                        pre_pids = []
+                        nav_pids = []
+
+                        try:
+                            pre_pids = start_pre_stack(node, args, scenario, pre_script, shared_pre_logs)
+                            nav_pids = start_group_stack(
+                                node, args, workspace_src, group, scenario, group_shared_logs
+                            )
+                            result = node.run_trial(trial_index, perform_reset=True)
+                        except Exception as exc:
+                            node.get_logger().error(
+                                f"[{scenario.name}][{group.name}] Trial {trial_index} startup failed after "
+                                f"relaunch: {exc}"
+                            )
+                            result = node._make_failed_result(trial_index, "startup_failed")
+
+                    result.group = group.name
+                    result.scenario = scenario.name
+                    trial_results.append(result)
+
+                cleanup_active_stacks(pre_pids, nav_pids, args.inter_trial_cleanup_s)
+                nav_pids = []
+                pre_pids = []
+        else:
+            for group in groups:
+                node.get_logger().info(f"[{scenario.name}] Starting group {group.name}")
+                for trial_index in range(1, trials_per_group + 1):
+                    restart_count = 0
+                    result = None
+                    while True:
+                        node.get_logger().info(
+                            f"[{scenario.name}][{group.name}] Trial {trial_index}/{trials_per_group}"
+                        )
+                        trial_log_dirs = build_trial_log_dirs(
+                            output_dir,
+                            group.name,
+                            trial_index,
+                            suite_name=suite_name,
+                            scenario_name=None if scenario.name == "dynamic_test" else scenario.name,
+                        )
+                        for log_dir in trial_log_dirs.values():
+                            log_dir.mkdir(parents=True, exist_ok=True)
+
+                        cleanup_active_stacks(pre_pids, nav_pids, args.inter_trial_cleanup_s)
+                        pre_pids = []
+                        nav_pids = []
+
+                        try:
+                            pre_pids = start_pre_stack(node, args, scenario, pre_script, trial_log_dirs["sim_pre"])
+                            nav_pids = start_group_stack(
+                                node, args, workspace_src, group, scenario, trial_log_dirs["nav"]
+                            )
+                            result = node.run_trial(trial_index, perform_reset=False)
+                        except Exception as exc:
+                            node.get_logger().error(
+                                f"[{scenario.name}][{group.name}] Trial {trial_index} startup failed: {exc}"
+                            )
+                            result = node._make_failed_result(trial_index, "startup_failed")
+
+                        if result.outcome not in {"reset_failed", "startup_failed"}:
+                            break
+
+                        restart_count += 1
+                        node.get_logger().warn(
+                            f"[{scenario.name}][{group.name}] Trial {trial_index} failed during setup "
+                            f"({result.outcome}); restarting cold stacks "
+                            f"({restart_count}/{args.max_trial_restarts})."
+                        )
+                        cleanup_active_stacks(pre_pids, nav_pids, args.inter_trial_cleanup_s)
+                        pre_pids = []
+                        nav_pids = []
+
+                        if not args.restart_on_reset_failure or restart_count >= args.max_trial_restarts:
+                            break
+
+                    if result is None:
+                        result = node._make_failed_result(trial_index, "startup_failed")
+                    result.group = group.name
+                    result.scenario = scenario.name
+                    trial_results.append(result)
+
+                    cleanup_active_stacks(pre_pids, nav_pids, args.inter_trial_cleanup_s)
+                    pre_pids = []
+                    nav_pids = []
+    finally:
+        cleanup_active_stacks(pre_pids, nav_pids, args.inter_trial_cleanup_s)
+
+    return trial_results
 
 
 def parse_args() -> argparse.Namespace:
@@ -1068,6 +1362,22 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run Gazebo navigation ablation experiments automatically.")
     parser.add_argument("--workspace-src", type=Path, default=default_root, help="Path to the workspace src directory.")
     parser.add_argument("--trials-per-group", type=int, default=50, help="Number of trials per group.")
+    parser.add_argument(
+        "--run-multi-scenario",
+        action="store_true",
+        help="Also run the narrow-corridor and random-crowd robustness scenes.",
+    )
+    parser.add_argument(
+        "--skip-ablation",
+        action="store_true",
+        help="Skip the default dynamic_test ablation suite and run only the requested extras.",
+    )
+    parser.add_argument(
+        "--multi-scenario-trials",
+        type=int,
+        default=20,
+        help="Number of trials per group for each extra multi-scenario scene.",
+    )
     parser.add_argument("--goal-x", type=float, default=4.0, help="Goal x position in map frame.")
     parser.add_argument("--goal-y", type=float, default=0.0, help="Goal y position in map frame.")
     parser.add_argument("--goal-frame", default="map", help="Goal frame id.")
@@ -1295,6 +1605,11 @@ def parse_args() -> argparse.Namespace:
         default=default_root / "ablation_eval_output",
         help="Directory for raw and summary CSV outputs.",
     )
+    parser.add_argument(
+        "--include-teb",
+        action="store_true",
+        help="Append the TEB baseline group after the original Baseline/RiskOnly/Full ablation groups.",
+    )
     parser.set_defaults(restart_on_reset_failure=True)
     parser.set_defaults(use_analytic_obstacle_clearance=True)
     parser.set_defaults(publish_manual_goal_topics=False)
@@ -1308,141 +1623,72 @@ def main() -> int:
     workspace_src = args.workspace_src.resolve()
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
-    groups = [
-        ExperimentGroup("Baseline", "sim_nav_dwb_baseline.sh"),
-        ExperimentGroup("RiskOnly", "sim_nav_dwb_risk_only.sh"),
-        ExperimentGroup("Full", "sim_nav.sh"),
-    ]
+    if args.skip_ablation and not args.run_multi_scenario:
+        print("Nothing to do: use the default ablation run or pass --run-multi-scenario.")
+        return 1
 
-    pre_script = workspace_src / "sim_pre.sh"
-    if not pre_script.exists():
-        raise FileNotFoundError(f"Missing pre-stack script: {pre_script}")
-
-    for group in groups:
-        script_path = workspace_src / group.script
-        if not script_path.exists():
-            raise FileNotFoundError(f"Missing group launch script: {script_path}")
-
-    pre_pids: List[int] = []
-    nav_pids: List[int] = []
-    trial_results: List[TrialResult] = []
+    ablation_results: List[TrialResult] = []
+    multi_scenario_results: List[TrialResult] = []
 
     rclpy.init(args=None)
     node = AblationEvaluator(args)
 
     try:
-        if args.reuse_running_stacks:
-            cleanup_active_stacks([], [], args.inter_trial_cleanup_s)
-            shared_pre_logs = args.output_dir / "logs" / "shared" / "sim_pre"
-            shared_pre_logs.mkdir(parents=True, exist_ok=True)
-            pre_pids = start_pre_stack(node, args, pre_script, shared_pre_logs)
+        if not args.skip_ablation:
+            ablation_results = run_experiment_suite(
+                node=node,
+                args=args,
+                workspace_src=workspace_src,
+                scenario=build_dynamic_test_scenario(args),
+                groups=build_ablation_groups(args),
+                trials_per_group=args.trials_per_group,
+                output_dir=args.output_dir,
+                suite_name="ablation",
+            )
 
-            for group in groups:
-                node.get_logger().info(f"Starting group {group.name}")
-                group_shared_logs = args.output_dir / "logs" / group.name.lower() / "shared_nav"
-                group_shared_logs.mkdir(parents=True, exist_ok=True)
-                nav_pids = start_group_stack(node, args, workspace_src, group, group_shared_logs)
-
-                for trial_index in range(1, args.trials_per_group + 1):
-                    node.get_logger().info(f"[{group.name}] Trial {trial_index}/{args.trials_per_group}")
-                    restart_count = 0
-                    result = node.run_trial(trial_index, perform_reset=True)
-                    while (
-                        result.outcome in {"reset_failed", "startup_failed"}
-                        and args.restart_on_reset_failure
-                        and restart_count < args.max_trial_restarts
-                    ):
-                        restart_count += 1
-                        node.get_logger().warn(
-                            f"[{group.name}] Trial {trial_index} failed during setup ({result.outcome}); restarting stacks "
-                            f"({restart_count}/{args.max_trial_restarts})."
-                        )
-                        cleanup_active_stacks(pre_pids, nav_pids, args.inter_trial_cleanup_s)
-                        pre_pids = []
-                        nav_pids = []
-
-                        try:
-                            pre_pids = start_pre_stack(node, args, pre_script, shared_pre_logs)
-                            nav_pids = start_group_stack(node, args, workspace_src, group, group_shared_logs)
-                            result = node.run_trial(trial_index, perform_reset=True)
-                        except Exception as exc:
-                            node.get_logger().error(
-                                f"[{group.name}] Trial {trial_index} startup failed after relaunch: {exc}"
-                            )
-                            result = node._make_failed_result(trial_index, "startup_failed")
-
-                    result.group = group.name
-                    trial_results.append(result)
-
-                cleanup_active_stacks(pre_pids, nav_pids, args.inter_trial_cleanup_s)
-                nav_pids = []
-                pre_pids = []
-        else:
-            for group in groups:
-                node.get_logger().info(f"Starting group {group.name}")
-                for trial_index in range(1, args.trials_per_group + 1):
-                    restart_count = 0
-                    result = None
-                    while True:
-                        node.get_logger().info(f"[{group.name}] Trial {trial_index}/{args.trials_per_group}")
-                        trial_log_dirs = build_trial_log_dirs(args.output_dir, group.name, trial_index)
-                        for log_dir in trial_log_dirs.values():
-                            log_dir.mkdir(parents=True, exist_ok=True)
-
-                        cleanup_active_stacks(pre_pids, nav_pids, args.inter_trial_cleanup_s)
-                        pre_pids = []
-                        nav_pids = []
-
-                        try:
-                            pre_pids = start_pre_stack(node, args, pre_script, trial_log_dirs["sim_pre"])
-                            nav_pids = start_group_stack(node, args, workspace_src, group, trial_log_dirs["nav"])
-                            result = node.run_trial(trial_index, perform_reset=False)
-                        except Exception as exc:
-                            node.get_logger().error(
-                                f"[{group.name}] Trial {trial_index} startup failed: {exc}"
-                            )
-                            result = node._make_failed_result(trial_index, "startup_failed")
-
-                        if result.outcome not in {"reset_failed", "startup_failed"}:
-                            break
-
-                        restart_count += 1
-                        node.get_logger().warn(
-                            f"[{group.name}] Trial {trial_index} failed during setup ({result.outcome}); restarting cold stacks "
-                            f"({restart_count}/{args.max_trial_restarts})."
-                        )
-                        cleanup_active_stacks(pre_pids, nav_pids, args.inter_trial_cleanup_s)
-                        pre_pids = []
-                        nav_pids = []
-
-                        if not args.restart_on_reset_failure or restart_count >= args.max_trial_restarts:
-                            break
-
-                    if result is None:
-                        result = node._make_failed_result(trial_index, "startup_failed")
-                    result.group = group.name
-                    trial_results.append(result)
-
-                    cleanup_active_stacks(pre_pids, nav_pids, args.inter_trial_cleanup_s)
-                    pre_pids = []
-                    nav_pids = []
-
+        if args.run_multi_scenario:
+            multi_groups = build_multi_scenario_groups(args)
+            for scenario in build_multi_scenarios(args):
+                multi_scenario_results.extend(
+                    run_experiment_suite(
+                        node=node,
+                        args=args,
+                        workspace_src=workspace_src,
+                        scenario=scenario,
+                        groups=multi_groups,
+                        trials_per_group=args.multi_scenario_trials,
+                        output_dir=args.output_dir,
+                        suite_name="multi_scenario",
+                    )
+                )
     finally:
-        cleanup_active_stacks(pre_pids, nav_pids, args.inter_trial_cleanup_s)
         node.close()
         node.destroy_node()
         rclpy.shutdown()
 
-    results_df = pd.DataFrame(asdict(result) for result in trial_results)
-    raw_csv = args.output_dir / "ablation_trials.csv"
-    results_df.to_csv(raw_csv, index=False)
+    if ablation_results:
+        results_df = pd.DataFrame(asdict(result) for result in ablation_results)
+        raw_csv = args.output_dir / "ablation_trials.csv"
+        results_df.to_csv(raw_csv, index=False)
 
-    summary_df = summarize_results(results_df)
-    summary_csv = args.output_dir / "ablation_results.csv"
-    summary_df.to_csv(summary_csv, index=False)
+        summary_df = summarize_results(results_df)
+        summary_csv = args.output_dir / "ablation_results.csv"
+        summary_df.to_csv(summary_csv, index=False)
 
-    print(f"Saved per-trial results to {raw_csv}")
-    print(f"Saved summary results to {summary_csv}")
+        print(f"Saved per-trial results to {raw_csv}")
+        print(f"Saved summary results to {summary_csv}")
+
+    if multi_scenario_results:
+        results_df = pd.DataFrame(asdict(result) for result in multi_scenario_results)
+        raw_csv = args.output_dir / "multi_scenario_trials.csv"
+        results_df.to_csv(raw_csv, index=False)
+
+        summary_df = summarize_results_by_columns(results_df, ("scenario", "group"))
+        summary_csv = args.output_dir / "multi_scenario_results.csv"
+        summary_df.to_csv(summary_csv, index=False)
+
+        print(f"Saved multi-scenario per-trial results to {raw_csv}")
+        print(f"Saved multi-scenario summary results to {summary_csv}")
     return 0
 
 

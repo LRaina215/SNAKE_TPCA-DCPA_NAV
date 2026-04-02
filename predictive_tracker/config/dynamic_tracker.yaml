@@ -20,3 +20,5 @@ predictive_tracker:
     publish_prediction_missed_frames: 2
     velocity_arrow_scale: 0.5
     input_timeout_sec: 1.0
+    latency_stats_enabled: true
+    latency_report_interval: 50

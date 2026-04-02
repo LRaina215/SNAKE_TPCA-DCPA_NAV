@@ -1,0 +1,233 @@
+<?xml version="1.0"?>
+<sdf version="1.6">
+  <world name="random_crowd">
+    <gravity>0 0 -9.8</gravity>
+    <magnetic_field>6e-06 2.3e-05 -4.2e-05</magnetic_field>
+    <atmosphere type="adiabatic"/>
+
+    <physics name="default_physics" type="ode">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+      <real_time_update_rate>1000</real_time_update_rate>
+    </physics>
+
+    <scene>
+      <ambient>0.45 0.45 0.45 1.0</ambient>
+      <background>0.75 0.82 0.88 1.0</background>
+      <shadows>false</shadows>
+    </scene>
+
+    <include>
+      <uri>model://ground_plane</uri>
+    </include>
+
+    <include>
+      <uri>model://sun</uri>
+    </include>
+
+    <model name="arena_floor">
+      <static>true</static>
+      <pose>0 0 0 0 0 0</pose>
+      <link name="floor_link">
+        <collision name="floor_collision">
+          <geometry>
+            <box>
+              <size>10 10 0.02</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="floor_visual">
+          <geometry>
+            <box>
+              <size>10 10 0.02</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.88 0.88 0.88 1.0</ambient>
+            <diffuse>0.88 0.88 0.88 1.0</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="north_wall">
+      <static>true</static>
+      <pose>0 5 0.25 0 0 0</pose>
+      <link name="wall_link">
+        <collision name="collision">
+          <geometry>
+            <box>
+              <size>10 0.15 0.5</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <box>
+              <size>10 0.15 0.5</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.55 0.55 0.60 1.0</ambient>
+            <diffuse>0.55 0.55 0.60 1.0</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="south_wall">
+      <static>true</static>
+      <pose>0 -5 0.25 0 0 0</pose>
+      <link name="wall_link">
+        <collision name="collision">
+          <geometry>
+            <box>
+              <size>10 0.15 0.5</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <box>
+              <size>10 0.15 0.5</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.55 0.55 0.60 1.0</ambient>
+            <diffuse>0.55 0.55 0.60 1.0</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="east_wall">
+      <static>true</static>
+      <pose>5 0 0.25 0 0 0</pose>
+      <link name="wall_link">
+        <collision name="collision">
+          <geometry>
+            <box>
+              <size>0.15 10 0.5</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <box>
+              <size>0.15 10 0.5</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.55 0.55 0.60 1.0</ambient>
+            <diffuse>0.55 0.55 0.60 1.0</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="west_wall">
+      <static>true</static>
+      <pose>-5 0 0.25 0 0 0</pose>
+      <link name="wall_link">
+        <collision name="collision">
+          <geometry>
+            <box>
+              <size>0.15 10 0.5</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <box>
+              <size>0.15 10 0.5</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.55 0.55 0.60 1.0</ambient>
+            <diffuse>0.55 0.55 0.60 1.0</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="obs1">
+      <pose>-1.2 -2.1 0.75 0 0 0</pose>
+      <link name="obs1_link">
+        <gravity>true</gravity>
+        <kinematic>true</kinematic>
+        <self_collide>false</self_collide>
+        <inertial><mass>12.0</mass><inertia><ixx>2.52</ixx><iyy>2.52</iyy><izz>0.54</izz></inertia></inertial>
+        <collision name="collision"><geometry><cylinder><radius>0.3</radius><length>1.5</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.3</radius><length>1.5</length></cylinder></geometry><material><ambient>0.88 0.20 0.20 1.0</ambient><diffuse>0.88 0.20 0.20 1.0</diffuse></material></visual>
+      </link>
+      <plugin name="obs1_planar_move" filename="libgazebo_ros_planar_move.so">
+        <ros><namespace>/obs1</namespace><remapping>cmd_vel:=cmd_vel</remapping><remapping>odom:=odom</remapping></ros>
+        <update_rate>100</update_rate><publish_rate>30</publish_rate><publish_odom>false</publish_odom><publish_odom_tf>false</publish_odom_tf><odometry_frame>obs1_odom</odometry_frame><robot_base_frame>obs1_link</robot_base_frame>
+      </plugin>
+    </model>
+
+    <model name="obs2">
+      <pose>1.7 -1.4 0.75 0 0 0</pose>
+      <link name="obs2_link">
+        <gravity>true</gravity>
+        <kinematic>true</kinematic>
+        <self_collide>false</self_collide>
+        <inertial><mass>12.0</mass><inertia><ixx>2.52</ixx><iyy>2.52</iyy><izz>0.54</izz></inertia></inertial>
+        <collision name="collision"><geometry><cylinder><radius>0.3</radius><length>1.5</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.3</radius><length>1.5</length></cylinder></geometry><material><ambient>0.18 0.22 0.85 1.0</ambient><diffuse>0.18 0.22 0.85 1.0</diffuse></material></visual>
+      </link>
+      <plugin name="obs2_planar_move" filename="libgazebo_ros_planar_move.so">
+        <ros><namespace>/obs2</namespace><remapping>cmd_vel:=cmd_vel</remapping><remapping>odom:=odom</remapping></ros>
+        <update_rate>100</update_rate><publish_rate>30</publish_rate><publish_odom>false</publish_odom><publish_odom_tf>false</publish_odom_tf><odometry_frame>obs2_odom</odometry_frame><robot_base_frame>obs2_link</robot_base_frame>
+      </plugin>
+    </model>
+
+    <model name="obs3">
+      <pose>-0.4 1.8 0.75 0 0 0</pose>
+      <link name="obs3_link">
+        <gravity>true</gravity>
+        <kinematic>true</kinematic>
+        <self_collide>false</self_collide>
+        <inertial><mass>12.0</mass><inertia><ixx>2.52</ixx><iyy>2.52</iyy><izz>0.54</izz></inertia></inertial>
+        <collision name="collision"><geometry><cylinder><radius>0.3</radius><length>1.5</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.3</radius><length>1.5</length></cylinder></geometry><material><ambient>0.20 0.72 0.30 1.0</ambient><diffuse>0.20 0.72 0.30 1.0</diffuse></material></visual>
+      </link>
+      <plugin name="obs3_planar_move" filename="libgazebo_ros_planar_move.so">
+        <ros><namespace>/obs3</namespace><remapping>cmd_vel:=cmd_vel</remapping><remapping>odom:=odom</remapping></ros>
+        <update_rate>100</update_rate><publish_rate>30</publish_rate><publish_odom>false</publish_odom><publish_odom_tf>false</publish_odom_tf><odometry_frame>obs3_odom</odometry_frame><robot_base_frame>obs3_link</robot_base_frame>
+      </plugin>
+    </model>
+
+    <model name="obs4">
+      <pose>2.0 2.2 0.75 0 0 0</pose>
+      <link name="obs4_link">
+        <gravity>true</gravity>
+        <kinematic>true</kinematic>
+        <self_collide>false</self_collide>
+        <inertial><mass>12.0</mass><inertia><ixx>2.52</ixx><iyy>2.52</iyy><izz>0.54</izz></inertia></inertial>
+        <collision name="collision"><geometry><cylinder><radius>0.3</radius><length>1.5</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.3</radius><length>1.5</length></cylinder></geometry><material><ambient>0.74 0.55 0.16 1.0</ambient><diffuse>0.74 0.55 0.16 1.0</diffuse></material></visual>
+      </link>
+      <plugin name="obs4_planar_move" filename="libgazebo_ros_planar_move.so">
+        <ros><namespace>/obs4</namespace><remapping>cmd_vel:=cmd_vel</remapping><remapping>odom:=odom</remapping></ros>
+        <update_rate>100</update_rate><publish_rate>30</publish_rate><publish_odom>false</publish_odom><publish_odom_tf>false</publish_odom_tf><odometry_frame>obs4_odom</odometry_frame><robot_base_frame>obs4_link</robot_base_frame>
+      </plugin>
+    </model>
+
+    <model name="obs5">
+      <pose>-2.3 0.9 0.75 0 0 0</pose>
+      <link name="obs5_link">
+        <gravity>true</gravity>
+        <kinematic>true</kinematic>
+        <self_collide>false</self_collide>
+        <inertial><mass>12.0</mass><inertia><ixx>2.52</ixx><iyy>2.52</iyy><izz>0.54</izz></inertia></inertial>
+        <collision name="collision"><geometry><cylinder><radius>0.3</radius><length>1.5</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.3</radius><length>1.5</length></cylinder></geometry><material><ambient>0.62 0.28 0.76 1.0</ambient><diffuse>0.62 0.28 0.76 1.0</diffuse></material></visual>
+      </link>
+      <plugin name="obs5_planar_move" filename="libgazebo_ros_planar_move.so">
+        <ros><namespace>/obs5</namespace><remapping>cmd_vel:=cmd_vel</remapping><remapping>odom:=odom</remapping></ros>
+        <update_rate>100</update_rate><publish_rate>30</publish_rate><publish_odom>false</publish_odom><publish_odom_tf>false</publish_odom_tf><odometry_frame>obs5_odom</odometry_frame><robot_base_frame>obs5_link</robot_base_frame>
+      </plugin>
+    </model>
+  </world>
+</sdf>

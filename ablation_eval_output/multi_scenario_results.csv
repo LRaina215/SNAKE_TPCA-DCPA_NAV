@@ -1,0 +1,3 @@
+scenario,group,success_rate_pct_mean,success_rate_pct_var,mean_navigation_time_s_mean,mean_navigation_time_s_var,average_translational_speed_mps_mean,average_translational_speed_mps_var,minimum_clearance_m_mean,minimum_clearance_m_var,velocity_sign_flip_count_mean,velocity_sign_flip_count_var
+narrow_corridor,Full,0.0,,,,,,,,0.0,
+random_crowd,Full,0.0,,,,,,,,0.0,

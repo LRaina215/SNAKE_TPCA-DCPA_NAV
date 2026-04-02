@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <limits>
 #include <memory>
@@ -88,6 +89,8 @@ public:
       declare_parameter<int>("publish_prediction_missed_frames", 2);
     velocity_arrow_scale_ = declare_parameter<double>("velocity_arrow_scale", 0.5);
     input_timeout_sec_ = declare_parameter<double>("input_timeout_sec", 1.0);
+    latency_stats_enabled_ = declare_parameter<bool>("latency_stats_enabled", false);
+    latency_report_interval_ = declare_parameter<int>("latency_report_interval", 50);
 
     tf_buffer_ = std::make_shared<tf2_ros::Buffer>(get_clock());
     tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
@@ -115,6 +118,7 @@ public:
 private:
   void pointCloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
   {
+    const auto start_time = std::chrono::steady_clock::now();
     last_input_receive_time_ = get_clock()->now();
     input_received_once_ = true;
     stale_timeout_handled_ = false;
@@ -161,6 +165,26 @@ private:
     last_output_header_ = transformed_cloud_msg.header;
     updateTracks(detections, rclcpp::Time(transformed_cloud_msg.header.stamp));
     publishTrackedObstacles(transformed_cloud_msg.header);
+
+    if (latency_stats_enabled_) {
+      const auto end_time = std::chrono::steady_clock::now();
+      const double elapsed_ms =
+        std::chrono::duration<double, std::milli>(end_time - start_time).count();
+      latency_sample_count_ += 1;
+      latency_accumulator_ms_ += elapsed_ms;
+      latency_max_ms_ = std::max(latency_max_ms_, elapsed_ms);
+      if (latency_sample_count_ % static_cast<std::size_t>(std::max(1, latency_report_interval_)) == 0) {
+        const double average_ms = latency_accumulator_ms_ /
+          static_cast<double>(latency_sample_count_);
+        RCLCPP_INFO(
+          get_logger(),
+          "Tracker latency over %zu frames: avg=%.3f ms max=%.3f ms",
+          latency_sample_count_, average_ms, latency_max_ms_);
+        latency_sample_count_ = 0;
+        latency_accumulator_ms_ = 0.0;
+        latency_max_ms_ = 0.0;
+      }
+    }
   }
 
   void publishTimerCallback()
@@ -620,6 +644,11 @@ private:
   int publish_prediction_missed_frames_{2};
   double velocity_arrow_scale_{0.5};
   double input_timeout_sec_{1.0};
+  bool latency_stats_enabled_{false};
+  int latency_report_interval_{50};
+  std::size_t latency_sample_count_{0};
+  double latency_accumulator_ms_{0.0};
+  double latency_max_ms_{0.0};
   int next_track_id_{0};
   bool input_received_once_{false};
   bool stale_timeout_handled_{false};
