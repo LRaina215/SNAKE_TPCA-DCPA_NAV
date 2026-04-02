@@ -1,4 +1,5 @@
-group,success_rate_pct_mean,success_rate_pct_var,mean_navigation_time_s_mean,mean_navigation_time_s_var,average_translational_speed_mps_mean,average_translational_speed_mps_var,minimum_clearance_m_mean,minimum_clearance_m_var,velocity_sign_flip_count_mean,velocity_sign_flip_count_var
-Baseline,100.0,,7.472808899001393,,1.192014804972764,,-0.11045627824822074,,6.0,
-RiskOnly,100.0,,13.972561478003627,,1.1320775569816102,,-0.5403825769235018,,1.0,
-Full,100.0,,4.782438934998936,,1.7138506838425398,,-0.18116149064113346,,0.0,
+group,success_rate_pct_mean,success_rate_pct_var,mean_navigation_time_s_mean,mean_navigation_time_s_var,average_translational_speed_mps_mean,average_translational_speed_mps_var,minimum_clearance_m_mean,minimum_clearance_m_var,velocity_sign_flip_count_mean,velocity_sign_flip_count_var,tracker_latency_ms_mean,tracker_latency_ms_var,algorithm_latency_ms_mean,algorithm_latency_ms_var,algorithm_latency_source
+Baseline,100.0,,12.396087560000524,,0.9427081281712744,,-0.6480196630931243,,12.0,,,,,,
+RiskOnly,100.0,,11.522161804999996,,1.1177369743628744,,-0.1337882970221333,,3.0,,,,0.0003629810976284721,,tcpa_dcpa_critic
+Full,100.0,,4.783452001000114,,1.7016559374418274,,-0.18644476440116076,,0.0,,,,0.0004072696393947071,,tcpa_dcpa_critic
+TEB,100.0,,3.362915845000316,,2.4648002494930434,,0.0895278930949957,,1.0,,,,26.647499999999997,,teb_local_planner

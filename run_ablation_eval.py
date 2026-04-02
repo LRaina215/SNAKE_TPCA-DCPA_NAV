@@ -3,11 +3,13 @@
 import argparse
 import math
 import os
+import re
 import signal
 import subprocess
 import sys
 import tempfile
 import time
+from collections import OrderedDict
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -20,6 +22,7 @@ from nav2_msgs.action import NavigateToPose
 from nav_msgs.msg import Odometry
 from rclpy.action import ActionClient
 from rclpy.node import Node
+from sensor_msgs.msg import PointCloud2
 from std_srvs.srv import Empty
 
 try:
@@ -135,6 +138,16 @@ class TrialResult:
     min_clearance_m: float
     velocity_sign_flip_count: int
     path_length_m: float
+    tracker_latency_ms: float
+    algorithm_latency_ms: float
+    algorithm_latency_source: str
+
+
+@dataclass(frozen=True)
+class LatencyMetrics:
+    tracker_latency_ms: float = float("nan")
+    algorithm_latency_ms: float = float("nan")
+    algorithm_latency_source: str = ""
 
 
 @dataclass(frozen=True)
@@ -194,6 +207,17 @@ class EntitySnapshot:
 
     def position_xy(self) -> Tuple[float, float]:
         return (self.x, self.y)
+
+
+TRACKER_LATENCY_PATTERN = re.compile(
+    r"Tracker latency over (?P<count>\d+) frames: avg=(?P<avg>[0-9.]+) ms"
+)
+TCPA_LATENCY_PATTERN = re.compile(
+    r"TCPADCPA score latency over (?P<count>\d+) calls: avg=(?P<avg>[0-9.]+) ms"
+)
+TEB_LATENCY_PATTERN = re.compile(
+    r"TEB command latency over (?P<count>\d+) calls: avg=(?P<avg>[0-9.]+) ms"
+)
 
 
 class AblationEvaluator(Node):
@@ -280,6 +304,11 @@ class AblationEvaluator(Node):
 
         self._subscriptions.append(self.create_subscription(Odometry, args.odom_topic, self._odom_cb, 50))
         self._subscriptions.append(self.create_subscription(Twist, args.cmd_vel_topic, self._cmd_vel_cb, 50))
+        self._subscriptions.append(
+            self.create_subscription(
+                PointCloud2, args.segmentation_obstacle_topic, self._segmentation_obstacle_cb, 20
+            )
+        )
         if ModelStates is not None:
             model_state_topics = []
             for topic in (args.model_states_topic, "/gazebo/model_states", "/model_states"):
@@ -314,6 +343,9 @@ class AblationEvaluator(Node):
         self._last_nonzero_cmd_sign = 0
         self._last_nonzero_cmd_wall = 0.0
         self._obstacle_motion_start_wall: Optional[float] = None
+        self._segmentation_wall_by_stamp: "OrderedDict[Tuple[int, int], float]" = OrderedDict()
+        self._tracker_latency_sum_ms = 0.0
+        self._tracker_latency_count = 0
         self._robot_xml: Optional[str] = None
 
     def configure_scenario(self, scenario: ScenarioConfig) -> None:
@@ -670,6 +702,9 @@ class AblationEvaluator(Node):
             min_clearance_m=float("nan"),
             velocity_sign_flip_count=0,
             path_length_m=0.0,
+            tracker_latency_ms=float("nan"),
+            algorithm_latency_ms=float("nan"),
+            algorithm_latency_source="",
         )
 
     def _build_fallback_initial_entity_snapshots(self) -> Dict[str, EntitySnapshot]:
@@ -802,6 +837,9 @@ class AblationEvaluator(Node):
         self._last_nonzero_cmd_sign = 0
         self._last_nonzero_cmd_wall = 0.0
         self._obstacle_motion_start_wall = None
+        self._segmentation_wall_by_stamp.clear()
+        self._tracker_latency_sum_ms = 0.0
+        self._tracker_latency_count = 0
         self._update_clearance()
 
     def _stop_metrics(self) -> None:
@@ -815,6 +853,11 @@ class AblationEvaluator(Node):
             min_clearance = float("nan")
         else:
             min_clearance = self._min_clearance
+        tracker_latency_ms = (
+            self._tracker_latency_sum_ms / float(self._tracker_latency_count)
+            if self._tracker_latency_count > 0
+            else float("nan")
+        )
         return TrialResult(
             scenario="",
             group="",
@@ -826,6 +869,9 @@ class AblationEvaluator(Node):
             min_clearance_m=min_clearance,
             velocity_sign_flip_count=self._velocity_sign_flips,
             path_length_m=self._path_length,
+            tracker_latency_ms=tracker_latency_ms,
+            algorithm_latency_ms=float("nan"),
+            algorithm_latency_source="",
         )
 
     def _current_robot_xy(self) -> Optional[Tuple[float, float]]:
@@ -843,6 +889,15 @@ class AblationEvaluator(Node):
             self._path_length += math.hypot(xy[0] - self._last_odom_xy[0], xy[1] - self._last_odom_xy[1])
         self._last_odom_xy = xy
         self._update_clearance()
+
+    def _segmentation_obstacle_cb(self, msg: PointCloud2) -> None:
+        if not self._trial_active:
+            return
+
+        stamp_key = (int(msg.header.stamp.sec), int(msg.header.stamp.nanosec))
+        self._segmentation_wall_by_stamp[stamp_key] = time.monotonic()
+        while len(self._segmentation_wall_by_stamp) > 200:
+            self._segmentation_wall_by_stamp.popitem(last=False)
 
     def _cmd_vel_cb(self, msg: Twist) -> None:
         if not self._trial_active:
@@ -886,6 +941,13 @@ class AblationEvaluator(Node):
             self._update_clearance()
 
     def _tracked_obstacles_cb(self, msg) -> None:
+        if self._trial_active:
+            stamp_key = (int(msg.header.stamp.sec), int(msg.header.stamp.nanosec))
+            segmentation_wall = self._segmentation_wall_by_stamp.pop(stamp_key, None)
+            if segmentation_wall is not None:
+                latency_ms = max(0.0, (time.monotonic() - segmentation_wall) * 1000.0)
+                self._tracker_latency_sum_ms += latency_ms
+                self._tracker_latency_count += 1
         self._tracked_obstacles_xy = [
             (obstacle.position.x, obstacle.position.y) for obstacle in msg.obstacles
         ]
@@ -1139,6 +1201,66 @@ def build_trial_log_dirs(
     }
 
 
+def _parse_weighted_latency_average(log_files: Sequence[Path], pattern: re.Pattern) -> float:
+    weighted_total = 0.0
+    sample_total = 0
+
+    for log_file in log_files:
+        if not log_file.exists():
+            continue
+        text = log_file.read_text(encoding="utf-8", errors="ignore")
+        for match in pattern.finditer(text):
+            count = int(match.group("count"))
+            avg_ms = float(match.group("avg"))
+            weighted_total += count * avg_ms
+            sample_total += count
+
+    if sample_total == 0:
+        return float("nan")
+    return weighted_total / float(sample_total)
+
+
+def extract_trial_latency_metrics(
+    group_name: str,
+    trial_log_dirs: Optional[Dict[str, Path]],
+) -> LatencyMetrics:
+    if trial_log_dirs is None:
+        return LatencyMetrics()
+
+    sim_pre_dir = trial_log_dirs.get("sim_pre")
+    nav_dir = trial_log_dirs.get("nav")
+
+    tracker_logs = []
+    if sim_pre_dir is not None:
+        tracker_logs.extend([
+            sim_pre_dir / "tracker_latency.log",
+            sim_pre_dir / "Tracker.log",
+        ])
+    tracker_latency_ms = _parse_weighted_latency_average(tracker_logs, TRACKER_LATENCY_PATTERN)
+
+    nav_logs = sorted(nav_dir.glob("*.log")) if nav_dir is not None and nav_dir.exists() else []
+    group_key = group_name.strip().lower()
+    if group_key == "teb":
+        algorithm_latency_ms = _parse_weighted_latency_average(nav_logs, TEB_LATENCY_PATTERN)
+        algorithm_latency_source = "teb_local_planner"
+    elif group_key in {"full", "riskonly"}:
+        tcpa_logs = []
+        if nav_dir is not None:
+            tcpa_logs.append(nav_dir / "tcpa_latency.log")
+        tcpa_logs.extend(nav_logs)
+        algorithm_latency_ms = _parse_weighted_latency_average(tcpa_logs, TCPA_LATENCY_PATTERN)
+        algorithm_latency_source = "tcpa_dcpa_critic"
+    else:
+        algorithm_latency_ms = float("nan")
+        algorithm_latency_source = ""
+
+    return LatencyMetrics(
+        tracker_latency_ms=tracker_latency_ms,
+        algorithm_latency_ms=algorithm_latency_ms,
+        algorithm_latency_source=algorithm_latency_source,
+    )
+
+
 def start_pre_stack(
     node: AblationEvaluator,
     args: argparse.Namespace,
@@ -1186,6 +1308,9 @@ def summarize_results_by_columns(results_df: pd.DataFrame, group_columns: Sequen
             group_key = (group_key,)
         success_pct = group_df["success"] * 100.0
         row = {column: value for column, value in zip(group_columns, group_key)}
+        latency_sources = [
+            source for source in group_df["algorithm_latency_source"].dropna().tolist() if source
+        ]
         row.update(
             {
                 "success_rate_pct_mean": success_pct.mean(),
@@ -1198,6 +1323,11 @@ def summarize_results_by_columns(results_df: pd.DataFrame, group_columns: Sequen
                 "minimum_clearance_m_var": group_df["min_clearance_m"].var(ddof=1),
                 "velocity_sign_flip_count_mean": group_df["velocity_sign_flip_count"].mean(),
                 "velocity_sign_flip_count_var": group_df["velocity_sign_flip_count"].var(ddof=1),
+                "tracker_latency_ms_mean": group_df["tracker_latency_ms"].mean(),
+                "tracker_latency_ms_var": group_df["tracker_latency_ms"].var(ddof=1),
+                "algorithm_latency_ms_mean": group_df["algorithm_latency_ms"].mean(),
+                "algorithm_latency_ms_var": group_df["algorithm_latency_ms"].var(ddof=1),
+                "algorithm_latency_source": latency_sources[0] if latency_sources else "",
             }
         )
         rows.append(row)
@@ -1283,8 +1413,15 @@ def run_experiment_suite(
                             )
                             result = node._make_failed_result(trial_index, "startup_failed")
 
+                    latency_metrics = LatencyMetrics()
                     result.group = group.name
                     result.scenario = scenario.name
+                    if not math.isnan(latency_metrics.tracker_latency_ms):
+                        result.tracker_latency_ms = latency_metrics.tracker_latency_ms
+                    if not math.isnan(latency_metrics.algorithm_latency_ms):
+                        result.algorithm_latency_ms = latency_metrics.algorithm_latency_ms
+                    if latency_metrics.algorithm_latency_source:
+                        result.algorithm_latency_source = latency_metrics.algorithm_latency_source
                     trial_results.append(result)
 
                 cleanup_active_stacks(pre_pids, nav_pids, args.inter_trial_cleanup_s)
@@ -1344,13 +1481,21 @@ def run_experiment_suite(
 
                     if result is None:
                         result = node._make_failed_result(trial_index, "startup_failed")
-                    result.group = group.name
-                    result.scenario = scenario.name
-                    trial_results.append(result)
 
                     cleanup_active_stacks(pre_pids, nav_pids, args.inter_trial_cleanup_s)
+                    latency_metrics = extract_trial_latency_metrics(group.name, trial_log_dirs)
                     pre_pids = []
                     nav_pids = []
+
+                    result.group = group.name
+                    result.scenario = scenario.name
+                    if not math.isnan(latency_metrics.tracker_latency_ms):
+                        result.tracker_latency_ms = latency_metrics.tracker_latency_ms
+                    if not math.isnan(latency_metrics.algorithm_latency_ms):
+                        result.algorithm_latency_ms = latency_metrics.algorithm_latency_ms
+                    if latency_metrics.algorithm_latency_source:
+                        result.algorithm_latency_source = latency_metrics.algorithm_latency_source
+                    trial_results.append(result)
     finally:
         cleanup_active_stacks(pre_pids, nav_pids, args.inter_trial_cleanup_s)
 
@@ -1531,6 +1676,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--odom-topic", default="/odom", help="Odometry topic.")
     parser.add_argument("--cmd-vel-topic", default="/cmd_vel", help="Command velocity topic.")
+    parser.add_argument(
+        "--segmentation-obstacle-topic",
+        default="/segmentation/obstacle",
+        help="Obstacle point cloud topic used to estimate tracker end-to-end latency.",
+    )
     parser.add_argument("--tracked-obstacles-topic", default="/tracked_obstacles", help="Tracked obstacles topic.")
     parser.add_argument("--model-states-topic", default="/gazebo/model_states", help="Gazebo model states topic.")
     parser.add_argument("--goal-action", default="/navigate_to_pose", help="NavigateToPose action name.")

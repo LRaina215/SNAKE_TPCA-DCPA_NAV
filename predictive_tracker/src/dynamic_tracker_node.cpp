@@ -1,6 +1,9 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
+#include <fstream>
+#include <iomanip>
 #include <limits>
 #include <memory>
 #include <numeric>
@@ -89,8 +92,8 @@ public:
       declare_parameter<int>("publish_prediction_missed_frames", 2);
     velocity_arrow_scale_ = declare_parameter<double>("velocity_arrow_scale", 0.5);
     input_timeout_sec_ = declare_parameter<double>("input_timeout_sec", 1.0);
-    latency_stats_enabled_ = declare_parameter<bool>("latency_stats_enabled", false);
-    latency_report_interval_ = declare_parameter<int>("latency_report_interval", 50);
+    latency_stats_enabled_ = declare_parameter<bool>("latency_stats_enabled", true);
+    latency_report_interval_ = declare_parameter<int>("latency_report_interval", 20);
 
     tf_buffer_ = std::make_shared<tf2_ros::Buffer>(get_clock());
     tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
@@ -115,10 +118,68 @@ public:
     RCLCPP_INFO(get_logger(), "Dynamic tracker listening on %s", input_topic_.c_str());
   }
 
+  ~DynamicTrackerNode() override
+  {
+    flushLatencyStats();
+  }
+
 private:
+  void flushLatencyStats()
+  {
+    if (!latency_stats_enabled_ || latency_sample_count_ == 0) {
+      return;
+    }
+
+    const double average_ms = latency_accumulator_ms_ /
+      static_cast<double>(latency_sample_count_);
+    std::ostringstream line;
+    line << "Tracker latency over " << latency_sample_count_
+         << " frames: avg=" << std::fixed << std::setprecision(3) << average_ms
+         << " ms max=" << latency_max_ms_ << " ms";
+    RCLCPP_INFO(
+      get_logger(),
+      "%s", line.str().c_str());
+
+    const char * auto_eval_log_dir = std::getenv("AUTO_EVAL_LOG_DIR");
+    if (auto_eval_log_dir != nullptr && auto_eval_log_dir[0] != '\0') {
+      std::ofstream latency_log(std::string(auto_eval_log_dir) + "/tracker_latency.log", std::ios::app);
+      if (latency_log.is_open()) {
+        latency_log << line.str() << '\n';
+      }
+    }
+
+    latency_sample_count_ = 0;
+    latency_accumulator_ms_ = 0.0;
+    latency_max_ms_ = 0.0;
+  }
+
   void pointCloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
   {
-    const auto start_time = std::chrono::steady_clock::now();
+    struct LatencyScope
+    {
+      DynamicTrackerNode * self;
+      std::chrono::steady_clock::time_point start;
+
+      ~LatencyScope()
+      {
+        if (!self->latency_stats_enabled_) {
+          return;
+        }
+        const auto end_time = std::chrono::steady_clock::now();
+        const double elapsed_ms =
+          std::chrono::duration<double, std::milli>(end_time - start).count();
+        self->latency_sample_count_ += 1;
+        self->latency_accumulator_ms_ += elapsed_ms;
+        self->latency_max_ms_ = std::max(self->latency_max_ms_, elapsed_ms);
+        if (
+          self->latency_sample_count_ %
+          static_cast<std::size_t>(std::max(1, self->latency_report_interval_)) == 0)
+        {
+          self->flushLatencyStats();
+        }
+      }
+    } latency_scope{this, std::chrono::steady_clock::now()};
+
     last_input_receive_time_ = get_clock()->now();
     input_received_once_ = true;
     stale_timeout_handled_ = false;
@@ -165,26 +226,6 @@ private:
     last_output_header_ = transformed_cloud_msg.header;
     updateTracks(detections, rclcpp::Time(transformed_cloud_msg.header.stamp));
     publishTrackedObstacles(transformed_cloud_msg.header);
-
-    if (latency_stats_enabled_) {
-      const auto end_time = std::chrono::steady_clock::now();
-      const double elapsed_ms =
-        std::chrono::duration<double, std::milli>(end_time - start_time).count();
-      latency_sample_count_ += 1;
-      latency_accumulator_ms_ += elapsed_ms;
-      latency_max_ms_ = std::max(latency_max_ms_, elapsed_ms);
-      if (latency_sample_count_ % static_cast<std::size_t>(std::max(1, latency_report_interval_)) == 0) {
-        const double average_ms = latency_accumulator_ms_ /
-          static_cast<double>(latency_sample_count_);
-        RCLCPP_INFO(
-          get_logger(),
-          "Tracker latency over %zu frames: avg=%.3f ms max=%.3f ms",
-          latency_sample_count_, average_ms, latency_max_ms_);
-        latency_sample_count_ = 0;
-        latency_accumulator_ms_ = 0.0;
-        latency_max_ms_ = 0.0;
-      }
-    }
   }
 
   void publishTimerCallback()

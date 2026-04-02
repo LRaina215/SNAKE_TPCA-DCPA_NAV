@@ -74,6 +74,22 @@ private:
   double direction_flip_speed_threshold_{0.2};
   double axis_commitment_penalty_scale_{0.0};
   double axis_commitment_speed_threshold_{0.2};
+  double side_escape_activation_tcpa_{1.2};
+  double side_escape_activation_dcpa_{1.0};
+  double side_escape_lateral_speed_threshold_{0.35};
+  double side_escape_forward_band_{0.8};
+  double side_escape_nominal_speed_{1.4};
+  double side_escape_goal_bias_{0.15};
+  double side_escape_switch_margin_{0.15};
+  double side_escape_hold_time_{0.45};
+  double side_escape_commitment_penalty_scale_{3.0};
+  double side_escape_low_speed_penalty_scale_{1.8};
+  double side_escape_longitudinal_speed_threshold_{0.8};
+  double close_front_blend_distance_{1.0};
+  double close_front_blend_tcpa_{0.9};
+  double close_front_lateral_speed_threshold_{0.45};
+  double close_front_lateral_preference_scale_{2.4};
+  double close_front_same_side_penalty_scale_{3.2};
   bool latency_stats_enabled_{false};
   int latency_report_interval_{500};
   std::size_t latency_sample_count_{0};
@@ -84,6 +100,10 @@ private:
   double goal_direction_x_{0.0};
   double goal_direction_y_{0.0};
   bool has_goal_direction_{false};
+  bool side_escape_active_{false};
+  int preferred_longitudinal_mode_{0};
+  double side_escape_risk_weight_{0.0};
+  rclcpp::Time preferred_longitudinal_mode_stamp_{0, 0, RCL_ROS_TIME};
   std::string tracked_topic_{"/tracked_obstacles"};
 };
 

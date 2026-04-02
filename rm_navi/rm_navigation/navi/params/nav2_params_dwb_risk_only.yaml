@@ -191,6 +191,8 @@ controller_server:
       TCPADCPA.escape_alignment_penalty_scale: 0.0
       TCPADCPA.escape_alignment_speed_threshold: 1.8
       TCPADCPA.escape_lateral_weight: 1.8
+      TCPADCPA.latency_stats_enabled: true
+      TCPADCPA.latency_report_interval: 20
       TCPADCPA.direction_flip_penalty_scale: 0.0
       TCPADCPA.direction_flip_speed_threshold: 0.05
       RotateToGoal.scale: 0.0

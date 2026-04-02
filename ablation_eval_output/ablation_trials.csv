@@ -1,4 +1,5 @@
-scenario,group,trial_index,success,outcome,navigation_time_s,average_speed_mps,min_clearance_m,velocity_sign_flip_count,path_length_m
-dynamic_test,Baseline,1,1,succeeded,7.472808899001393,1.192014804972764,-0.11045627824822074,6,8.90769884234188
-dynamic_test,RiskOnly,1,1,succeeded,13.972561478003627,1.1320775569816102,-0.5403825769235018,1,15.818023262793703
-dynamic_test,Full,1,1,succeeded,4.782438934998936,1.7138506838425398,-0.18116149064113346,0,8.196386239183115
+scenario,group,trial_index,success,outcome,navigation_time_s,average_speed_mps,min_clearance_m,velocity_sign_flip_count,path_length_m,tracker_latency_ms,algorithm_latency_ms,algorithm_latency_source
+dynamic_test,Baseline,1,1,succeeded,12.396087560000524,0.9427081281712744,-0.6480196630931243,12,11.685892500335314,,,
+dynamic_test,RiskOnly,1,1,succeeded,11.522161804999996,1.1177369743628744,-0.1337882970221333,3,12.878746274040171,,0.0003629810976284721,tcpa_dcpa_critic
+dynamic_test,Full,1,1,succeeded,4.783452001000114,1.7016559374418274,-0.18644476440116076,0,8.139789498969835,,0.0004072696393947071,tcpa_dcpa_critic
+dynamic_test,TEB,1,1,succeeded,3.362915845000316,2.4648002494930434,0.0895278930949957,1,8.288915813780887,,26.647499999999997,teb_local_planner

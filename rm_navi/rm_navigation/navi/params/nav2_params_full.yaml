@@ -204,11 +204,27 @@ controller_server:
       TCPADCPA.swept_corridor_half_width: 0.85
       TCPADCPA.rear_tail_margin: 0.25
       TCPADCPA.latency_stats_enabled: true
-      TCPADCPA.latency_report_interval: 500
+      TCPADCPA.latency_report_interval: 20
       TCPADCPA.direction_flip_penalty_scale: 1.5
       TCPADCPA.direction_flip_speed_threshold: 0.05
       TCPADCPA.axis_commitment_penalty_scale: 2.2
       TCPADCPA.axis_commitment_speed_threshold: 0.2
+      TCPADCPA.side_escape_activation_tcpa: 1.25
+      TCPADCPA.side_escape_activation_dcpa: 0.95
+      TCPADCPA.side_escape_lateral_speed_threshold: 0.35
+      TCPADCPA.side_escape_forward_band: 0.95
+      TCPADCPA.side_escape_nominal_speed: 1.6
+      TCPADCPA.side_escape_goal_bias: 0.12
+      TCPADCPA.side_escape_switch_margin: 0.18
+      TCPADCPA.side_escape_hold_time: 0.45
+      TCPADCPA.side_escape_commitment_penalty_scale: 3.6
+      TCPADCPA.side_escape_low_speed_penalty_scale: 2.0
+      TCPADCPA.side_escape_longitudinal_speed_threshold: 0.9
+      TCPADCPA.close_front_blend_distance: 1.0
+      TCPADCPA.close_front_blend_tcpa: 0.9
+      TCPADCPA.close_front_lateral_speed_threshold: 0.45
+      TCPADCPA.close_front_lateral_preference_scale: 2.4
+      TCPADCPA.close_front_same_side_penalty_scale: 3.2
       RotateToGoal.scale: 0.0
       RotateToGoal.slowing_factor: 5.0
       RotateToGoal.lookahead_time: -1.0
