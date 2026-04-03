@@ -209,6 +209,9 @@ class EntitySnapshot:
     def position_xy(self) -> Tuple[float, float]:
         return (self.x, self.y)
 
+    def yaw(self) -> float:
+        return quaternion_to_yaw(self.qx, self.qy, self.qz, self.qw)
+
 
 TRACKER_LATENCY_PATTERN = re.compile(
     r"Tracker latency over (?P<count>\d+) frames: avg=(?P<avg>[0-9.]+) ms"
@@ -219,6 +222,16 @@ TCPA_LATENCY_PATTERN = re.compile(
 TEB_LATENCY_PATTERN = re.compile(
     r"TEB command latency over (?P<count>\d+) calls: avg=(?P<avg>[0-9.]+) ms"
 )
+
+
+def quaternion_to_yaw(x: float, y: float, z: float, w: float) -> float:
+    siny_cosp = 2.0 * (w * z + x * y)
+    cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
+    return math.atan2(siny_cosp, cosy_cosp)
+
+
+def normalize_angle(angle: float) -> float:
+    return math.atan2(math.sin(angle), math.cos(angle))
 
 
 class AblationEvaluator(Node):
@@ -326,8 +339,11 @@ class AblationEvaluator(Node):
 
         self._have_odom = False
         self._have_model_states = False
+        self._have_segmentation_obstacle = False
         self._robot_odom_xy: Optional[Tuple[float, float]] = None
+        self._robot_odom_yaw: Optional[float] = None
         self._robot_truth_xy: Optional[Tuple[float, float]] = None
+        self._robot_truth_yaw: Optional[float] = None
         self._truth_obstacles: Dict[str, Tuple[float, float]] = {}
         self._tracked_obstacles_xy: List[Tuple[float, float]] = []
         self._latest_entity_snapshots: Dict[str, EntitySnapshot] = {}
@@ -342,6 +358,7 @@ class AblationEvaluator(Node):
         self._collision_observed = False
         self._collision_count = 0
         self._collision_active = False
+        self._initial_robot_yaw: Optional[float] = None
         self._velocity_sign_flips = 0
         self._last_nonzero_cmd_sign = 0
         self._last_nonzero_cmd_wall = 0.0
@@ -379,6 +396,14 @@ class AblationEvaluator(Node):
                 return
         raise RuntimeError("Timed out waiting for /odom and /navigate_to_pose")
 
+    def wait_for_front_end_ready(self, timeout_s: float) -> bool:
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            rclpy.spin_once(self, timeout_sec=0.1)
+            if self._have_segmentation_obstacle:
+                return True
+        return False
+
     def wait_for_robot_near_pose(self, target_xy: Tuple[float, float], tolerance_m: float, timeout_s: float) -> None:
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
@@ -396,13 +421,17 @@ class AblationEvaluator(Node):
     def clear_stack_runtime_state(self) -> None:
         self._have_odom = False
         self._have_model_states = False
+        self._have_segmentation_obstacle = False
         self._robot_odom_xy = None
+        self._robot_odom_yaw = None
         self._robot_truth_xy = None
+        self._robot_truth_yaw = None
         self._truth_obstacles = {}
         self._tracked_obstacles_xy = []
         self._latest_entity_snapshots = {}
         self._initial_entity_snapshots = {}
         self._obstacle_motion_start_wall = None
+        self._initial_robot_yaw = None
 
     def wait_for_entity_states_ready(self, timeout_s: float, names: Optional[Sequence[str]] = None) -> None:
         deadline = time.monotonic() + timeout_s
@@ -839,6 +868,7 @@ class AblationEvaluator(Node):
         self._collision_observed = False
         self._collision_count = 0
         self._collision_active = False
+        self._initial_robot_yaw = self._current_robot_yaw()
         self._velocity_sign_flips = 0
         self._last_nonzero_cmd_sign = 0
         self._last_nonzero_cmd_wall = 0.0
@@ -884,9 +914,38 @@ class AblationEvaluator(Node):
     def _current_robot_xy(self) -> Optional[Tuple[float, float]]:
         return self._robot_truth_xy or self._robot_odom_xy
 
+    def _current_robot_yaw(self) -> Optional[float]:
+        if self._robot_truth_yaw is not None:
+            return self._robot_truth_yaw
+        return self._robot_odom_yaw
+
+    def _update_collision_from_yaw(self) -> None:
+        if not self._trial_active:
+            return
+
+        current_yaw = self._current_robot_yaw()
+        if current_yaw is None or self._initial_robot_yaw is None:
+            return
+
+        yaw_error = abs(normalize_angle(current_yaw - self._initial_robot_yaw))
+        collision_now = yaw_error >= self.args.collision_yaw_threshold_rad
+
+        if collision_now:
+            if not self._collision_active:
+                self._collision_count += 1
+            self._collision_active = True
+        elif yaw_error <= self.args.collision_yaw_clear_threshold_rad:
+            self._collision_active = False
+
     def _odom_cb(self, msg: Odometry) -> None:
         xy = (msg.pose.pose.position.x, msg.pose.pose.position.y)
         self._robot_odom_xy = xy
+        self._robot_odom_yaw = quaternion_to_yaw(
+            msg.pose.pose.orientation.x,
+            msg.pose.pose.orientation.y,
+            msg.pose.pose.orientation.z,
+            msg.pose.pose.orientation.w,
+        )
         self._have_odom = True
 
         if not self._trial_active:
@@ -895,9 +954,11 @@ class AblationEvaluator(Node):
         if self._last_odom_xy is not None:
             self._path_length += math.hypot(xy[0] - self._last_odom_xy[0], xy[1] - self._last_odom_xy[1])
         self._last_odom_xy = xy
+        self._update_collision_from_yaw()
         self._update_clearance()
 
     def _segmentation_obstacle_cb(self, msg: PointCloud2) -> None:
+        self._have_segmentation_obstacle = True
         if not self._trial_active:
             return
 
@@ -935,6 +996,7 @@ class AblationEvaluator(Node):
         robot_snapshot = entity_snapshots.get(ROBOT_MODEL_NAME)
         if robot_snapshot is not None:
             self._robot_truth_xy = robot_snapshot.position_xy()
+            self._robot_truth_yaw = robot_snapshot.yaw()
 
         truth_obstacles = {
             obstacle_name: entity_snapshots[obstacle_name].position_xy()
@@ -945,6 +1007,7 @@ class AblationEvaluator(Node):
             self._truth_obstacles = truth_obstacles
 
         if self._trial_active:
+            self._update_collision_from_yaw()
             self._update_clearance()
 
     def _tracked_obstacles_cb(self, msg) -> None:
@@ -974,23 +1037,14 @@ class AblationEvaluator(Node):
         if not obstacle_positions:
             return
 
-        collision_now = False
         for obstacle_xy in obstacle_positions:
             center_distance = math.hypot(robot_xy[0] - obstacle_xy[0], robot_xy[1] - obstacle_xy[1])
             clearance = center_distance - self.args.robot_radius - self.args.obstacle_radius
             self._min_clearance = min(self._min_clearance, clearance)
             if clearance <= self.args.collision_clearance_threshold:
-                collision_now = True
-
-        if collision_now:
-            self._collision_observed = True
-            if not self._collision_active:
-                self._collision_count += 1
-            self._collision_active = True
-            if self.args.abort_on_estimated_collision:
-                self._collision_detected = True
-        else:
-            self._collision_active = False
+                self._collision_observed = True
+                if self.args.abort_on_estimated_collision:
+                    self._collision_detected = True
 
     def _get_analytic_obstacle_positions(self, now_wall: float) -> List[Tuple[float, float]]:
         if self.current_analytic_clearance_mode != "dynamic_test":
@@ -1125,10 +1179,10 @@ def resolve_nav_script_for_scenario(group: ExperimentGroup, scenario: ScenarioCo
     return group.script
 
 
-def launch_stack(script_path: Path, log_dir: Path) -> List[int]:
+def launch_stack(script_path: Path, log_dir: Path, headless: bool = True) -> List[int]:
     pid_file = Path(tempfile.mkstemp(prefix="ablation_pids_", suffix=".txt")[1])
     env = os.environ.copy()
-    env["AUTO_EVAL_HEADLESS"] = "1"
+    env["AUTO_EVAL_HEADLESS"] = "1" if headless else "0"
     env["AUTO_EVAL_SKIP_RVIZ"] = "1"
     env["AUTO_EVAL_PID_FILE"] = str(pid_file)
     env["AUTO_EVAL_LOG_DIR"] = str(log_dir)
@@ -1286,7 +1340,7 @@ def start_pre_stack(
 ) -> List[int]:
     node.configure_scenario(scenario)
     node.clear_stack_runtime_state()
-    pre_pids = launch_stack(pre_script, log_dir)
+    pre_pids = launch_stack(pre_script, log_dir, headless=not args.pre_stack_gui)
     node.wait_for_pre_stack_ready(args.stack_ready_timeout_s)
     node.wait_for_robot_near_pose(
         scenario.robot_initial_xy,
@@ -1294,6 +1348,11 @@ def start_pre_stack(
         args.initial_pose_timeout_s,
     )
     node._wait_for_pose_update(args.pre_stack_warmup_s)
+    if not node.wait_for_front_end_ready(args.front_end_ready_timeout_s):
+        node.get_logger().warn(
+            "Timed out waiting for /segmentation/obstacle samples; tracker latency may remain unavailable. "
+            "If this only happens in auto-eval, try rerunning with --pre-stack-gui."
+        )
     node.refresh_initial_entity_snapshots(args.initial_snapshot_timeout_s)
     return pre_pids
 
@@ -1307,7 +1366,7 @@ def start_group_stack(
     log_dir: Path,
 ) -> List[int]:
     nav_script = resolve_nav_script_for_scenario(group, scenario)
-    nav_pids = launch_stack(workspace_src / nav_script, log_dir)
+    nav_pids = launch_stack(workspace_src / nav_script, log_dir, headless=not args.nav_stack_gui)
     node.wait_for_nav_stack_ready(args.stack_ready_timeout_s)
     node._wait_for_pose_update(args.group_warmup_s)
     return nav_pids
@@ -1541,7 +1600,7 @@ def parse_args() -> argparse.Namespace:
         default=20,
         help="Number of trials per group for each extra multi-scenario scene.",
     )
-    parser.add_argument("--goal-x", type=float, default=4.0, help="Goal x position in map frame.")
+    parser.add_argument("--goal-x", type=float, default=4.2, help="Goal x position in map frame.")
     parser.add_argument("--goal-y", type=float, default=0.0, help="Goal y position in map frame.")
     parser.add_argument("--goal-frame", default="map", help="Goal frame id.")
     parser.add_argument(
@@ -1594,6 +1653,22 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=2.0,
         help="Extra wait after launching Gazebo before capturing initial entity states.",
+    )
+    parser.add_argument(
+        "--front-end-ready-timeout-s",
+        type=float,
+        default=30.0,
+        help="Timeout while waiting for the segmentation front-end to emit at least one obstacle cloud.",
+    )
+    parser.add_argument(
+        "--pre-stack-gui",
+        action="store_true",
+        help="Launch Gazebo pre-stack with GUI enabled instead of headless mode. Useful when the LiDAR front-end does not publish in headless runs.",
+    )
+    parser.add_argument(
+        "--nav-stack-gui",
+        action="store_true",
+        help="Launch nav stack scripts with GUI mode enabled. RViz still stays disabled in auto-eval mode.",
     )
     parser.add_argument("--group-warmup-s", type=float, default=5.0, help="Wait time after launching each nav stack.")
     parser.add_argument(
@@ -1674,6 +1749,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--goal-retry-delay-s", type=float, default=2.0, help="Delay between goal send retries.")
     parser.add_argument("--robot-radius", type=float, default=0.36, help="Collision radius of the robot.")
     parser.add_argument("--obstacle-radius", type=float, default=0.30, help="Collision radius of the dynamic obstacles.")
+    parser.add_argument(
+        "--collision-yaw-threshold-rad",
+        type=float,
+        default=0.08,
+        help="Yaw deviation threshold used to count a collision episode when spin is disabled.",
+    )
+    parser.add_argument(
+        "--collision-yaw-clear-threshold-rad",
+        type=float,
+        default=0.04,
+        help="Yaw deviation hysteresis threshold below which the evaluator arms the next collision episode.",
+    )
     parser.add_argument(
         "--collision-clearance-threshold",
         type=float,

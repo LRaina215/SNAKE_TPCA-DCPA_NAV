@@ -1,0 +1,5 @@
+group,tracker_latency_ms,algorithm_latency_ms,algorithm_latency_source
+Baseline,4.717,,
+RiskOnly,4.527,0.001,tcpa_dcpa_critic
+Full,4.5,0.001,tcpa_dcpa_critic
+TEB,4.287,35.225,teb_local_planner

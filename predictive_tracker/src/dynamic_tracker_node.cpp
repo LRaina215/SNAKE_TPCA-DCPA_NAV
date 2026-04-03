@@ -121,32 +121,60 @@ public:
   ~DynamicTrackerNode() override
   {
     flushLatencyStats();
+    writeLatencySummaryFile();
   }
 
 private:
+  std::string formatLatencySummary(
+    std::size_t sample_count,
+    double accumulator_ms,
+    double max_ms) const
+  {
+    const double average_ms = accumulator_ms / static_cast<double>(sample_count);
+    std::ostringstream line;
+    line << "Tracker latency over " << sample_count
+         << " frames: avg=" << std::fixed << std::setprecision(3) << average_ms
+         << " ms max=" << max_ms << " ms";
+    return line.str();
+  }
+
+  void writeLatencySummaryFile() const
+  {
+    if (!latency_stats_enabled_ || latency_total_sample_count_ == 0) {
+      return;
+    }
+
+    const char * auto_eval_log_dir = std::getenv("AUTO_EVAL_LOG_DIR");
+    if (auto_eval_log_dir == nullptr || auto_eval_log_dir[0] == '\0') {
+      return;
+    }
+
+    std::ofstream latency_log(
+      std::string(auto_eval_log_dir) + "/tracker_latency.log",
+      std::ios::out | std::ios::trunc);
+    if (!latency_log.is_open()) {
+      return;
+    }
+
+    latency_log << formatLatencySummary(
+      latency_total_sample_count_,
+      latency_total_accumulator_ms_,
+      latency_total_max_ms_) << '\n';
+  }
+
   void flushLatencyStats()
   {
     if (!latency_stats_enabled_ || latency_sample_count_ == 0) {
       return;
     }
 
-    const double average_ms = latency_accumulator_ms_ /
-      static_cast<double>(latency_sample_count_);
-    std::ostringstream line;
-    line << "Tracker latency over " << latency_sample_count_
-         << " frames: avg=" << std::fixed << std::setprecision(3) << average_ms
-         << " ms max=" << latency_max_ms_ << " ms";
+    const std::string line = formatLatencySummary(
+      latency_sample_count_,
+      latency_accumulator_ms_,
+      latency_max_ms_);
     RCLCPP_INFO(
       get_logger(),
-      "%s", line.str().c_str());
-
-    const char * auto_eval_log_dir = std::getenv("AUTO_EVAL_LOG_DIR");
-    if (auto_eval_log_dir != nullptr && auto_eval_log_dir[0] != '\0') {
-      std::ofstream latency_log(std::string(auto_eval_log_dir) + "/tracker_latency.log", std::ios::app);
-      if (latency_log.is_open()) {
-        latency_log << line.str() << '\n';
-      }
-    }
+      "%s", line.c_str());
 
     latency_sample_count_ = 0;
     latency_accumulator_ms_ = 0.0;
@@ -171,6 +199,10 @@ private:
         self->latency_sample_count_ += 1;
         self->latency_accumulator_ms_ += elapsed_ms;
         self->latency_max_ms_ = std::max(self->latency_max_ms_, elapsed_ms);
+        self->latency_total_sample_count_ += 1;
+        self->latency_total_accumulator_ms_ += elapsed_ms;
+        self->latency_total_max_ms_ = std::max(self->latency_total_max_ms_, elapsed_ms);
+        self->writeLatencySummaryFile();
         if (
           self->latency_sample_count_ %
           static_cast<std::size_t>(std::max(1, self->latency_report_interval_)) == 0)
@@ -690,6 +722,9 @@ private:
   std::size_t latency_sample_count_{0};
   double latency_accumulator_ms_{0.0};
   double latency_max_ms_{0.0};
+  std::size_t latency_total_sample_count_{0};
+  double latency_total_accumulator_ms_{0.0};
+  double latency_total_max_ms_{0.0};
   int next_track_id_{0};
   bool input_received_once_{false};
   bool stale_timeout_handled_{false};

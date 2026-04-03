@@ -1,0 +1,5 @@
+scenario,group,trial_count,success_count,goal_reaching_rate_pct
+narrow_corridor,Full,20,20,100.0
+narrow_corridor,TEB,20,19,95.0
+random_crowd,Full,20,20,100.0
+random_crowd,TEB,20,20,100.0

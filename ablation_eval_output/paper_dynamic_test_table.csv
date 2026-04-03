@@ -1,0 +1,5 @@
+group,trial_count,success_count,goal_reaching_rate_pct,mean_navigation_time_s,average_translational_speed_mps,algorithm_latency_ms,algorithm_latency_source
+Baseline,50,30,60.0,19.59,0.656,,
+RiskOnly,50,44,88.0,26.473,0.498,0.001,tcpa_dcpa_critic
+Full,50,50,100.0,20.186,0.658,0.001,tcpa_dcpa_critic
+TEB,50,50,100.0,5.819,1.476,35.225,teb_local_planner

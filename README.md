@@ -511,6 +511,27 @@ python3 run_ablation_eval.py
 python3 run_ablation_eval.py --trials-per-group 1
 ```
 
+如果你发现自动评测里 `tracker_latency_ms` 经常为空，说明当前这轮自动实验没有稳定收到
+`/segmentation/obstacle`。这种情况在纯 headless 预栈中偶尔会出现。此时建议先切换为：
+
+```bash
+python3 run_ablation_eval.py --trials-per-group 1 --pre-stack-gui
+```
+
+该参数的作用是：
+
+- `--pre-stack-gui`
+  - 让 `sim_pre.sh` 以带 Gazebo GUI 的方式启动，而不是强制 headless
+  - 仅用于提高前端感知链路（Livox / Point-LIO / linefit / tracker）在自动实验中的稳定性
+  - 不改变导航算法本身，只改变自动评测时的仿真启动方式
+
+脚本当前还增加了前端就绪等待机制：
+
+- `--front-end-ready-timeout-s`
+  - 默认会在启动 pre-stack 后等待 `/segmentation/obstacle` 首帧
+  - 如果超时，脚本会打印 warning，提示该轮 `tracker_latency_ms` 可能为空
+  - 这类 warning 不影响导航主实验运行，但会影响 tracker latency 统计完整性
+
 正式生成论文统计表时，建议直接运行：
 
 ```bash
@@ -527,6 +548,10 @@ python3 run_ablation_eval.py --trials-per-group 50 --include-teb
 
 - `ablation_eval_output/ablation_trials.csv`
 - `ablation_eval_output/ablation_results.csv`
+- `ablation_eval_output/paper_dynamic_test_table.csv`
+- `ablation_eval_output/paper_overhead_table.csv`
+- `ablation_eval_output/paper_multi_scenario_table.csv`
+- `ablation_eval_output/paper_multi_scenario_wide.csv`
 - `ablation_eval_output/logs/ablation/<group>/trial_xxx/sim_pre`
 - `ablation_eval_output/logs/ablation/<group>/trial_xxx/nav`
 其中：
@@ -549,6 +574,31 @@ python3 run_ablation_eval.py --trials-per-group 50 --include-teb
     - `collision_count_mean / collision_count_var`
     - `algorithm_latency_ms_mean / algorithm_latency_ms_var`
     - `algorithm_latency_source`
+- `paper_dynamic_test_table.csv`
+  - 由 `prepare_paper_tables.py` 从真实原始 CSV 二次整理得到
+  - 只保留当前 `PLANS.md` 明确要求、且相对稳定可解释的主实验指标：
+    - `goal_reaching_rate_pct`
+    - `mean_navigation_time_s`
+    - `average_translational_speed_mps`
+    - `algorithm_latency_ms`
+- `paper_overhead_table.csv`
+  - 面向论文中的 `Computational Overhead / Table III`
+  - 提供：
+    - `tracker_latency_ms`
+    - `algorithm_latency_ms`
+    - `algorithm_latency_source`
+- `paper_multi_scenario_table.csv`
+  - 面向论文中的 `Performance in Multi-Scenarios`
+  - 当前保留每个场景、每个方法的：
+    - `trial_count`
+    - `success_count`
+    - `goal_reaching_rate_pct`
+- `paper_multi_scenario_wide.csv`
+  - 与上一份文件来源相同，但改成“按方法排列表格”的宽表形式
+  - 更适合直接粘到论文总表或 LaTeX 表格中
+  - 当前列名通常为：
+    - `narrow_corridor`
+    - `random_crowd`
 - `logs/ablation/<group>/trial_xxx/...`
   - 保存每一轮独立 trial 的启动与导航日志
   - 当某一轮出现 `aborted`、`timeout` 或异常成功时，可直接对照该轮日志核查
@@ -558,6 +608,29 @@ python3 run_ablation_eval.py --trials-per-group 50 --include-teb
 - `Success Rate`、`Collision Count`、`Mean Navigation Time`、`Average Translational Speed`、`Velocity Sign-Flip Count` 可以直接用于三组方法横向对比
 - `Minimum Clearance` 当前更适合做相对比较，而不是绝对碰撞真值
 - `Algorithm Latency` 可用于补充计算开销对照，但应在论文中明确写明其统计来源
+
+如果目标是直接整理当前论文表格，建议不要直接手改原始 CSV，而是运行：
+
+```bash
+python3 prepare_paper_tables.py
+```
+
+该脚本会保留原始实验数据不变，并额外生成三份“论文用派生表”：
+
+- `paper_dynamic_test_table.csv`
+  - 对应主场景四组对照表
+- `paper_overhead_table.csv`
+  - 对应延迟/计算开销表
+- `paper_multi_scenario_table.csv`
+  - 对应多场景成功率表
+- `paper_multi_scenario_wide.csv`
+  - 对应多场景结果的宽表版本，便于直接放到论文总表中
+
+这样做的目的是：
+
+- 不覆盖原始 trial 记录
+- 不对实验结果做人为篡改
+- 只把当前对论文真正有价值、且口径相对稳定的指标提炼出来
 
 原因是：
 
@@ -570,6 +643,7 @@ python3 run_ablation_eval.py --trials-per-group 50 --include-teb
 - 一个面向论文消融实验的自动化评测工具
 - 用于批量生成 `Baseline / RiskOnly / Full` 三组方法的可复现实验数据
 - 在需要时也可追加 `TEB` 组，生成跨局部规划器对照数据
+- 对论文阶段，则优先从这些派生 CSV 取数，而不是直接手改原始 trial 记录
 
 #### 7.1.1 多场景鲁棒性评测
 
@@ -613,6 +687,8 @@ python3 run_ablation_eval.py --trials-per-group 50 --run-multi-scenario --multi-
 
 - `ablation_eval_output/multi_scenario_trials.csv`
 - `ablation_eval_output/multi_scenario_results.csv`
+- `ablation_eval_output/paper_multi_scenario_table.csv`
+- `ablation_eval_output/paper_multi_scenario_wide.csv`
 - `ablation_eval_output/logs/multi_scenario/<scene>/<group>/trial_xxx/sim_pre`
 - `ablation_eval_output/logs/multi_scenario/<scene>/<group>/trial_xxx/nav`
 
@@ -623,6 +699,10 @@ python3 run_ablation_eval.py --trials-per-group 50 --run-multi-scenario --multi-
 - `multi_scenario_results.csv`
   - 以 `scenario + group` 为索引统计汇总指标
   - 当前最主要用于提取各场景的 `success_rate_pct_mean`
+- `paper_multi_scenario_table.csv`
+  - 从多场景原始 CSV 派生出的论文长表
+- `paper_multi_scenario_wide.csv`
+  - 将多场景成功率整理成宽表，更适合直接写入 LaTeX 总表
 - `logs/multi_scenario/...`
   - 用于排查某个场景下的失败轮次
   - 例如检查狭窄走廊里是否是全局路径、局部代价地图或动态障碍干扰导致失败
@@ -664,9 +744,50 @@ python3 run_ablation_eval.py --trials-per-group 50 --run-multi-scenario --multi-
 
 - `Baseline` 由于没有自定义风险 critic，因此 `algorithm_latency_ms` 可能为空
 - `tracker_latency_ms` 当前依赖前端链路是否稳定输出可匹配的时间戳；若前端无有效样本，该列可能为空
+- 如果只在自动评测时出现大量空值，而手动仿真时前端正常，优先尝试：
+  - `python3 run_ablation_eval.py --trials-per-group 1 --pre-stack-gui`
+  - 确认 warning `Timed out waiting for /segmentation/obstacle samples` 是否消失
 - 因此论文里更稳妥的做法是：
   - 把 `algorithm_latency_ms` 作为主延迟指标
   - 把 `tracker_latency_ms` 视为可选补充项，只有在数据稳定时再纳入正文表格
+  - 若多场景下 tracker latency 出现明显离群值，优先采用主场景 `paper_overhead_table.csv` 作为正文延迟表
+  - 把 `collision_count` 和 `estimated minimum clearance` 继续保留在原始 CSV 中用于调试与现象分析，但不要强行作为当前论文主结论
+
+#### 7.2.1 当前这批实验结果如何用于论文
+
+如果你已经完成当前仓库中的正式跑数，那么推荐的取数口径是：
+
+- 主对照表
+  - 直接使用 `ablation_eval_output/paper_dynamic_test_table.csv`
+  - 对应 `dynamic_test` 主场景中的 `Baseline / RiskOnly / Full / TEB`
+  - 当前默认面向每组 `50` 次 trial 的统计
+- 计算开销表
+  - 直接使用 `ablation_eval_output/paper_overhead_table.csv`
+  - 推荐正文主指标写：
+    - `algorithm_latency_ms`
+    - `algorithm_latency_source`
+  - `tracker_latency_ms` 可作为补充说明或附表
+- 多场景表
+  - 使用 `ablation_eval_output/paper_multi_scenario_wide.csv`
+  - 当前更适合填写“多场景通过率/成功率”这一列
+  - 若需要保留每个场景的 trial 数与成功数，则查 `paper_multi_scenario_table.csv`
+
+当前不建议直接写进论文主表的指标包括：
+
+- `minimum_clearance_m`
+  - 目前很多轮次仍是估计量，而且会受跟踪误差影响
+- `collision_count`
+  - 当前定义基于“机体偏航异常”这一碰撞代理信号
+  - 对现象分析有帮助，但还不够适合作为唯一主结论指标
+
+因此，当前最稳妥的论文写法是：
+
+- 主表突出：
+  - `goal_reaching_rate_pct`
+  - `mean_navigation_time_s`
+  - `average_translational_speed_mps`
+  - `algorithm_latency_ms`
+- 将 `collision_count` 与 `estimated minimum clearance` 放在补充分析、附录或现象讨论中
 
 其中 `TEB` 组当前的定位是：
 
