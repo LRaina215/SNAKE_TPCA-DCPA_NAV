@@ -38,6 +38,7 @@ def main(bag_path):
     type_map = {t.name: t.type for t in topic_types}
 
     odom_data = []
+    cmd_vel_data = []
     tf_obs_data = []
     local_plan_data = []
     
@@ -66,6 +67,15 @@ def main(bag_path):
             vy = msg.twist.twist.linear.y
             wz = msg.twist.twist.angular.z
             odom_data.append([timestamp_sec, x, y, yaw, vx, vy, wz])
+
+        elif topic == '/cmd_vel':
+            vx = msg.linear.x
+            vy = msg.linear.y
+            vz = msg.linear.z
+            wx = msg.angular.x
+            wy = msg.angular.y
+            wz = msg.angular.z
+            cmd_vel_data.append([timestamp_sec, vx, vy, vz, wx, wy, wz])
 
         # 2. 尝试从 TF 提取障碍物 (兜底方案)
         elif topic == '/tf':
@@ -114,6 +124,14 @@ def main(bag_path):
         df_odom = pd.DataFrame(odom_data, columns=['time', 'x', 'y', 'yaw', 'vx', 'vy', 'wz'])
         df_odom.to_csv(os.path.join(output_dir, 'robot_odom.csv'), index=False)
         print(f"✅ 已生成: robot_odom.csv ({len(odom_data)} 行)")
+
+    if cmd_vel_data:
+        df_cmd = pd.DataFrame(
+            cmd_vel_data,
+            columns=['time', 'vx_cmd', 'vy_cmd', 'vz_cmd', 'wx_cmd', 'wy_cmd', 'wz_cmd']
+        )
+        df_cmd.to_csv(os.path.join(output_dir, 'cmd_vel.csv'), index=False)
+        print(f"✅ 已生成: cmd_vel.csv ({len(cmd_vel_data)} 行)")
 
     if tf_obs_data:
         df_tf = pd.DataFrame(tf_obs_data, columns=['time', 'obstacle_id', 'x', 'y'])

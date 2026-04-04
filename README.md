@@ -366,6 +366,7 @@ cd /home/lraina/auto_shao/src
 ./sim_pre_narrow.sh
 ./sim_pre_random.sh
 ./sim_nav_narrow.sh
+./sim_nav_dwb_baseline_narrow.sh
 ./sim_nav_teb_narrow.sh
 ```
 
@@ -380,6 +381,9 @@ cd /home/lraina/auto_shao/src
 - `sim_nav_narrow.sh`
   - 使用 `narrow_corridor_map.yaml`
   - 供当前 `Full` 方法在狭窄走廊场景中评测
+- `sim_nav_dwb_baseline_narrow.sh`
+  - 使用同一张走廊地图
+  - 供 `Baseline` 在狭窄走廊场景中做平滑性/犹豫现象对照
 - `sim_nav_teb_narrow.sh`
   - 使用同一张走廊地图
   - 供 `TEB` 在狭窄走廊场景中做额外对照
@@ -392,6 +396,199 @@ cd /home/lraina/auto_shao/src
   - 验证后续加入的“抑制犹豫/促进脱困”机制是否有效
 - `Full vs TEB`
   - 验证所提 DWB 增强方法相对主流动态避障局部规划器的通过表现与计算开销优势
+
+#### 7.0 速度平滑性对比实验（Baseline vs Full）
+
+为了支撑论文中关于 `Smoothness` 的现象图，当前仓库额外提供了一套“手动发目标 + 自动录 rosbag”的轻量脚本：
+
+- `run_smoothness_exp.sh`
+- `record_smoothness_bag.sh`
+
+它们的用途是：
+
+- 快速启动 `sim_pre + 指定导航栈`
+- 自动开始录制画 `Time vs Velocity` 折线图所需的话题
+- 用同一套录制流程分别采集 `Baseline` 与 `Full` 的速度曲线
+
+推荐的两组命令分别是：
+
+```bash
+./run_smoothness_exp.sh baseline
+./run_smoothness_exp.sh full
+```
+
+脚本默认行为如下：
+
+1. 启动 `sim_pre.sh`
+2. 根据参数启动对应导航栈
+   - `baseline -> ./sim_nav_dwb_baseline.sh`
+   - `full -> ./sim_nav.sh`
+3. 自动调用 `record_smoothness_bag.sh`
+4. 在终端中持续录制 rosbag，等待你在 RViz 手动点击目标点
+
+当前 `record_smoothness_bag.sh` 默认录制的话题为：
+
+- `/odom`
+- `/cmd_vel`
+- `/plan`
+- `/local_plan`
+- `/tracked_obstacles`
+- `/obs1/cmd_vel`
+- `/obs2/cmd_vel`
+- `/tf`
+- `/tf_static`
+- `/clock`
+
+其中最关键的是：
+
+- `/cmd_vel`
+  - 用于画控制器输出的线速度/角速度曲线
+  - 最能体现 `Baseline` 中的前后抖动、锯齿式调速等问题
+- `/odom`
+  - 用于画机器人实际执行速度曲线
+  - 也可用于和 `/cmd_vel` 对照，观察控制输出是否真正落到了底盘运动上
+
+推荐操作流程：
+
+1. 运行 `./run_smoothness_exp.sh baseline`
+2. 等待 rosbag 开始录制
+3. 在 RViz 中手动发送一个典型动态障碍场景目标点
+4. 机器人完成一次导航后，在录包终端按 `Ctrl+C`
+5. 再运行 `./run_smoothness_exp.sh full`
+6. 用相同目标点再录一次
+
+录包默认保存在：
+
+- `~/auto_shao/data/smoothness_bags/`
+
+录完之后，可以直接用现有解析脚本导出 CSV：
+
+```bash
+python3 extract_bag_to_csv.py ~/auto_shao/data/smoothness_bags/<your_bag_name>
+```
+
+当前解析结果会至少导出：
+
+- `robot_odom.csv`
+  - 包含 `time, x, y, yaw, vx, vy, wz`
+- `cmd_vel.csv`
+  - 包含 `time, vx_cmd, vy_cmd, vz_cmd, wx_cmd, wy_cmd, wz_cmd`
+
+因此后续无论你使用 `PlotJuggler`、`matplotlib`、MATLAB 还是 Excel，都可以直接画出：
+
+- `time vs vx_cmd`
+- `time vs wz_cmd`
+- `time vs vx`
+- `time vs wz`
+
+论文中建议的现象表达是：
+
+- `Baseline`
+  - 线速度在 `0` 与较大值之间频繁切换
+  - 角速度或控制输出呈现更明显的锯齿/抖动
+- `Full`
+  - 曲线过渡更连续
+  - 加减速更平滑，前后符号翻转明显减少
+
+如果你希望把这组 smoothness 图切换到 `narrow_corridor` 场景，当前仓库还提供了专门的启动脚本：
+
+```bash
+./run_smoothness_narrow.sh baseline
+./run_smoothness_narrow.sh full
+```
+
+其默认流程为：
+
+1. 启动 `sim_pre_narrow.sh`
+2. 启动狭窄走廊对应导航栈
+   - `baseline -> sim_nav_dwb_baseline_narrow.sh`
+   - `full -> sim_nav_narrow.sh`
+3. 自动调用 `record_smoothness_bag.sh`
+4. 等待你在 RViz 中发送同一目标点
+
+推荐这个场景的原因是：
+
+- 横向机动空间更受限
+- `Full` 的侧移行为不会像十字交汇场景那样主导整条速度曲线
+- 更容易把对比重点集中在“纵向是否犹豫、是否反复试探”上
+
+对于 `narrow_corridor` 的 smoothness 图，建议统一采用以下口径：
+
+- 起点：机器人默认出生点 `(-4.0, 0.0)` 附近
+- 终点：在 RViz 中手动发送到 `(4.0, 0.0)` 或其附近
+- 每个方法只录制一轮代表性通过过程
+- 若 `Baseline` 已在中途碰撞并进入“被撞停后的平线段”，后处理绘图时只截取碰撞前的交互窗口
+
+当前仓库也补充了两步式的平滑性出图脚本：
+
+```bash
+python3 prepare_smoothness_data.py
+python3 plot_smoothness.py --baseline <baseline_csv_dir> --full <full_csv_dir>
+```
+
+其中：
+
+- `prepare_smoothness_data.py`
+  - 会扫描 `smoothness_bags` 下全部 `*_csv`
+  - 自动裁掉静止段
+  - 生成 `smoothness_merged.csv` 等处理结果
+- `plot_smoothness.py`
+  - 会基于处理后的 CSV 生成论文用对比图
+  - 当前主图推荐使用：
+    - `smoothness_vx_comparison.png`
+  - 该图重点对比 `vx_cmd / vx`
+  - 用来量化“前后犹豫、纵向反复试探”是否被抑制
+
+如果 `Baseline` 在某一轮里已经碰撞并进入“被撞停后的平线段”，为了避免失公允，建议只截取碰撞前的交互窗口：
+
+```bash
+python3 plot_smoothness.py \
+  --baseline <baseline_csv_dir> \
+  --full <full_csv_dir> \
+  --baseline-end 6.5 \
+  --full-end 6.5
+```
+
+也就是说，当前 smoothness 图的推荐口径不是整轮的“总速度模长绝对更平”，而是：
+
+- `Baseline` 是否存在更明显的纵向速度反复试探
+- `Full` 是否能在保持通过能力的同时减少前后犹豫
+
+当前这版论文最终推荐采用的 smoothness 主图为：
+
+- `ablation_eval_output/smoothness_plots/paper_smoothness_vx_comparison.png`
+- `ablation_eval_output/smoothness_plots/paper_smoothness_vx_comparison.pdf`
+
+对应的数据与绘图口径为：
+
+- `Baseline`
+  - `baseline_smoothness_20260404_191231_csv`
+- `Full`
+  - `full_smoothness_20260404_191333_csv`
+- 绘图窗口
+  - `--baseline-end 8.0`
+  - `--full-end 8.0`
+
+对应命令为：
+
+```bash
+python3 plot_smoothness.py \
+  --baseline baseline_smoothness_20260404_191231_csv \
+  --full full_smoothness_20260404_191333_csv \
+  --baseline-end 8.0 \
+  --full-end 8.0
+```
+
+选择这张图的原因是：
+
+- `Baseline` 在该交互窗口中出现了明显的纵向指令极性翻转
+- `Full` 则呈现“减速 - 短暂停留 - 恢复前进”的连续决策过程
+- 该图更适合支撑“抑制前后犹豫、减少突发式反向试探”这一论点
+
+因此，论文正文对这张图的推荐表述不是“Full 在任何意义下都更平”，而是：
+
+- `Baseline` 更容易在动态交互中出现突发式前后试探
+- `Full` 更容易保持纵向决策连续性，并减少犹豫导致的反向切换
 
 #### 7.1 自动化消融评测脚本
 
