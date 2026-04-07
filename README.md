@@ -590,6 +590,84 @@ python3 plot_smoothness.py \
 - `Baseline` 更容易在动态交互中出现突发式前后试探
 - `Full` 更容易保持纵向决策连续性，并减少犹豫导致的反向切换
 
+### 8.1 实机验证推荐工作流
+
+在当前仓库中，最推荐的做法是不再直接复用 `sim_pre.sh / sim_nav.sh`，而是将仿真与实机工作流彻底分开：
+
+- 仿真工作流
+  - 继续使用 `sim_pre.sh`、`sim_nav.sh` 及各类 `sim_*` 脚本
+  - 服务于论文复现实验、消融对照和自动评测
+- 实机工作流
+  - 使用新增的 `pre_real.sh`
+  - 使用新增的 `nav_real.sh`
+  - 使用新增的 `rm_navi/rm_navigation/navi/params/nav2_params_real_full.yaml`
+
+当前这套实机推荐方案的原则是：
+
+- 恢复 `Point-LIO` 作为主里程计来源
+- 恢复 `ICP` 参与 `map -> odom` 闭环修正
+- 保留 `linefit_ground_segmentation_ros` 作为障碍物分割链路
+- 保留 `predictive_tracker -> /tracked_obstacles -> TCPADCPA critic` 这条动态风险链
+- 保持 `costmap` 与 `tracked_obstacles` 解耦
+  - `costmap` 使用高频 `/scan`
+  - `critic` 使用 `/tracked_obstacles`
+
+推荐启动顺序为：
+
+```bash
+./pre_real.sh
+./nav_real.sh
+```
+
+其中：
+
+- `pre_real.sh`
+  - 启动 `livox_ros_driver2`
+  - 启动机器人模型
+  - 启动 `Point-LIO`
+  - 启动 `odom_to_base_node.py`，将 `/odom_livox` 桥接为 Nav2 使用的 `/odom`
+  - 启动 `linefit_ground_segmentation_ros`
+  - 启动 `predictive_tracker`
+  - 启动 `pointcloud_to_laserscan`，输出实机 `costmap` 使用的 `/scan`
+- `nav_real.sh`
+  - 启动 `ICP`
+  - 启动 `localization_launch.py`
+  - 启动 `navigation_launch.py`
+  - 默认读取 `nav2_params_real_full.yaml`
+
+`nav_real.sh` 还支持通过环境变量覆盖地图和参数文件：
+
+```bash
+REAL_MAP_FILE=/path/to/your_map.yaml \
+REAL_NAV_PARAMS_FILE=/path/to/your_params.yaml \
+./nav_real.sh
+```
+
+当前最推荐的实机初版参数文件是：
+
+- `rm_navi/rm_navigation/navi/params/nav2_params_real_full.yaml`
+
+它与仿真版 `nav2_params.yaml` 的主要区别是：
+
+- 全部切回 `use_sim_time: false`
+- 去掉仿真用的 `/scan_nav`
+- 恢复实机 `costmap` 使用 `/scan`
+- 保留当前 `Full` 版 `TCPADCPA` critic 逻辑
+- 将速度上限、加速度上限和所有与速度相关的 critic 阈值缩回实机保守范围
+
+因此，当前最推荐的上机联调顺序是：
+
+1. 只启动 `pre_real.sh`，先检查：
+   - `/odom`
+   - `/segmentation/obstacle`
+   - `/tracked_obstacles`
+2. 再启动 `nav_real.sh`，检查：
+   - `map -> odom`
+   - `odom -> base_link`
+   - `/scan`
+3. 先做静态导航
+4. 最后再引入动态障碍做 `Full` 方法验证
+
 #### 7.1 自动化消融评测脚本
 
 为了减少手工重复启动仿真、发送目标点和统计数据的工作量，当前仓库中新增了自动评测脚本：

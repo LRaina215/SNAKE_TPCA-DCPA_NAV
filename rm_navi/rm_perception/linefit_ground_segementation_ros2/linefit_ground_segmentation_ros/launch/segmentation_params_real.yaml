@@ -1,0 +1,29 @@
+ground_segmentation:
+  ros__parameters:
+    n_threads: 6
+
+    r_min: 0.4
+    r_max: 50.0
+    n_bins: 140
+    n_segments: 360
+
+    max_dist_to_line: 0.05
+
+    # Real-robot reference values from the previously stable bring-up.
+    sensor_height: 0.35
+    min_slope: 0.0
+    max_slope: 0.35
+    max_fit_error: 0.075
+    long_threshold: 1.0
+    max_long_height: 0.1
+    max_start_height: 0.2
+    line_search_angle: 0.2
+
+    gravity_aligned_frame: ""
+
+    latch: false
+    visualize: false
+
+    input_topic: "/livox/lidar_no_body"
+    obstacle_output_topic: "/segmentation/obstacle"
+    ground_output_topic: "/segmentation/ground"
