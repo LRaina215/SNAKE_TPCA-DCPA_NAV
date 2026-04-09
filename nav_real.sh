@@ -14,7 +14,6 @@ MAP_FILE="${REAL_MAP_FILE:-${DEFAULT_MAP_FILE}}"
 PARAMS_FILE="${REAL_NAV_PARAMS_FILE:-${DEFAULT_PARAMS_FILE}}"
 RVIZ_FILE="${REAL_RVIZ_FILE:-${DEFAULT_RVIZ_FILE}}"
 ICP_PCD_FILE="${REAL_ICP_PCD_FILE:-${DEFAULT_ICP_PCD_FILE}}"
-TMP_PARAMS_FILE=""
 
 if [[ ! -f "${SETUP_FILE}" ]]; then
   echo "Missing workspace setup: ${SETUP_FILE}"
@@ -36,12 +35,11 @@ if [[ ! -f "${ICP_PCD_FILE}" ]]; then
   exit 1
 fi
 
-cleanup() {
-  if [[ -n "${TMP_PARAMS_FILE}" && -f "${TMP_PARAMS_FILE}" ]]; then
-    rm -f "${TMP_PARAMS_FILE}"
-  fi
-}
-trap cleanup EXIT
+HEADLESS_MODE="${AUTO_EVAL_HEADLESS:-0}"
+SKIP_RVIZ="${AUTO_EVAL_SKIP_RVIZ:-0}"
+PID_FILE="${AUTO_EVAL_PID_FILE:-}"
+LOG_DIR="${AUTO_EVAL_LOG_DIR:-${SCRIPT_DIR}/.auto_eval_logs/nav_real}"
+mkdir -p "${LOG_DIR}"
 
 set +u
 source "${SETUP_FILE}"
@@ -50,7 +48,9 @@ export RCUTILS_LOGGING_BUFFERED_STREAM=1
 
 # Real Nav2 parameter files still contain source-tree absolute paths for BT XML files.
 # Rewrite those prefixes at runtime so the script works on both development PC and NUC.
-TMP_PARAMS_FILE="$(mktemp /tmp/nav_real_params_XXXXXX.yaml)"
+# Keep the generated file alive after this wrapper exits; non-headless launches spawn child
+# terminals that may read the params file a bit later during Nav2 bringup.
+TMP_PARAMS_FILE="${LOG_DIR}/nav_real_params_$(date +%Y%m%d_%H%M%S)_$$.yaml"
 python3 - "${PARAMS_FILE}" "${TMP_PARAMS_FILE}" "${SCRIPT_DIR}" <<'PY'
 import sys
 from pathlib import Path
@@ -67,11 +67,6 @@ for old_prefix in (
 dst.write_text(text)
 PY
 PARAMS_FILE="${TMP_PARAMS_FILE}"
-
-HEADLESS_MODE="${AUTO_EVAL_HEADLESS:-0}"
-SKIP_RVIZ="${AUTO_EVAL_SKIP_RVIZ:-0}"
-PID_FILE="${AUTO_EVAL_PID_FILE:-}"
-LOG_DIR="${AUTO_EVAL_LOG_DIR:-${SCRIPT_DIR}/.auto_eval_logs/nav_real}"
 
 tabs=(
   "ICP|ros2 launch icp_registration icp.launch.py use_sim_time:=False pcd_path:=${ICP_PCD_FILE}"
