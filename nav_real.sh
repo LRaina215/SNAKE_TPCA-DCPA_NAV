@@ -14,6 +14,7 @@ MAP_FILE="${REAL_MAP_FILE:-${DEFAULT_MAP_FILE}}"
 PARAMS_FILE="${REAL_NAV_PARAMS_FILE:-${DEFAULT_PARAMS_FILE}}"
 RVIZ_FILE="${REAL_RVIZ_FILE:-${DEFAULT_RVIZ_FILE}}"
 ICP_PCD_FILE="${REAL_ICP_PCD_FILE:-${DEFAULT_ICP_PCD_FILE}}"
+TMP_PARAMS_FILE=""
 
 if [[ ! -f "${SETUP_FILE}" ]]; then
   echo "Missing workspace setup: ${SETUP_FILE}"
@@ -35,10 +36,37 @@ if [[ ! -f "${ICP_PCD_FILE}" ]]; then
   exit 1
 fi
 
+cleanup() {
+  if [[ -n "${TMP_PARAMS_FILE}" && -f "${TMP_PARAMS_FILE}" ]]; then
+    rm -f "${TMP_PARAMS_FILE}"
+  fi
+}
+trap cleanup EXIT
+
 set +u
 source "${SETUP_FILE}"
 set -u
 export RCUTILS_LOGGING_BUFFERED_STREAM=1
+
+# Real Nav2 parameter files still contain source-tree absolute paths for BT XML files.
+# Rewrite those prefixes at runtime so the script works on both development PC and NUC.
+TMP_PARAMS_FILE="$(mktemp /tmp/nav_real_params_XXXXXX.yaml)"
+python3 - "${PARAMS_FILE}" "${TMP_PARAMS_FILE}" "${SCRIPT_DIR}" <<'PY'
+import sys
+from pathlib import Path
+
+src = Path(sys.argv[1])
+dst = Path(sys.argv[2])
+script_dir = sys.argv[3]
+text = src.read_text()
+for old_prefix in (
+    "/home/lraina/auto_shao/src",
+    "/home/robomaster/auto_shao/src",
+):
+    text = text.replace(old_prefix, script_dir)
+dst.write_text(text)
+PY
+PARAMS_FILE="${TMP_PARAMS_FILE}"
 
 HEADLESS_MODE="${AUTO_EVAL_HEADLESS:-0}"
 SKIP_RVIZ="${AUTO_EVAL_SKIP_RVIZ:-0}"
