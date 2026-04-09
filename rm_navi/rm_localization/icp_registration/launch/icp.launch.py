@@ -1,8 +1,6 @@
 import os
 import sys
-import yaml
 from ament_index_python.packages import get_package_share_directory
-from launch.substitutions import Command
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 sys.path.append(os.path.join(get_package_share_directory('icp_registration'), 'launch'))
@@ -13,12 +11,13 @@ def generate_launch_description():
   
   params = os.path.join(get_package_share_directory('icp_registration'), 'config', 'icp.yaml')
   use_sim_time = LaunchConfiguration('use_sim_time')
+  pcd_path = LaunchConfiguration('pcd_path')
   node = Node(
     package='icp_registration',
     executable='icp_registration_node',
     name='icp_registration',
     output='screen',
-    parameters=[params, {'use_sim_time': use_sim_time}]
+    parameters=[params, {'use_sim_time': use_sim_time, 'pcd_path': pcd_path}]
   )
   
   return LaunchDescription([
@@ -26,6 +25,11 @@ def generate_launch_description():
       'use_sim_time',
       default_value='true',
       description='Use simulation (Gazebo) clock if true'
+    ),
+    DeclareLaunchArgument(
+      'pcd_path',
+      default_value='rm_navi/rm_localization/point_lio/PCD/scans.pcd',
+      description='ICP target PCD path'
     ),
     node
   ])

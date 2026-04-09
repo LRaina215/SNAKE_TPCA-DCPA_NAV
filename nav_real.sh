@@ -8,10 +8,12 @@ SETUP_FILE="${WORKSPACE_DIR}/install/setup.bash"
 DEFAULT_MAP_FILE="${SCRIPT_DIR}/rm_navi/rm_navigation/navi/maps/arena_map.yaml"
 DEFAULT_PARAMS_FILE="${SCRIPT_DIR}/rm_navi/rm_navigation/navi/params/nav2_params_real_full.yaml"
 DEFAULT_RVIZ_FILE="${SCRIPT_DIR}/rm_navi/rm_navigation/navi/rviz/nav2_default_view.rviz"
+DEFAULT_ICP_PCD_FILE="${SCRIPT_DIR}/rm_navi/rm_localization/point_lio/PCD/scans.pcd"
 
 MAP_FILE="${REAL_MAP_FILE:-${DEFAULT_MAP_FILE}}"
 PARAMS_FILE="${REAL_NAV_PARAMS_FILE:-${DEFAULT_PARAMS_FILE}}"
 RVIZ_FILE="${REAL_RVIZ_FILE:-${DEFAULT_RVIZ_FILE}}"
+ICP_PCD_FILE="${REAL_ICP_PCD_FILE:-${DEFAULT_ICP_PCD_FILE}}"
 
 if [[ ! -f "${SETUP_FILE}" ]]; then
   echo "Missing workspace setup: ${SETUP_FILE}"
@@ -28,6 +30,11 @@ if [[ ! -f "${PARAMS_FILE}" ]]; then
   exit 1
 fi
 
+if [[ ! -f "${ICP_PCD_FILE}" ]]; then
+  echo "Missing ICP PCD: ${ICP_PCD_FILE}"
+  exit 1
+fi
+
 set +u
 source "${SETUP_FILE}"
 set -u
@@ -39,7 +46,7 @@ PID_FILE="${AUTO_EVAL_PID_FILE:-}"
 LOG_DIR="${AUTO_EVAL_LOG_DIR:-${SCRIPT_DIR}/.auto_eval_logs/nav_real}"
 
 tabs=(
-  "ICP|ros2 launch icp_registration icp.launch.py use_sim_time:=False"
+  "ICP|ros2 launch icp_registration icp.launch.py use_sim_time:=False pcd_path:=${ICP_PCD_FILE}"
   "Localization|ros2 launch navi localization_launch.py use_sim_time:=False map:=${MAP_FILE} params_file:=${PARAMS_FILE}"
   "Nav2|ros2 launch nav2_bringup navigation_launch.py use_sim_time:=False params_file:=${PARAMS_FILE}"
 )
