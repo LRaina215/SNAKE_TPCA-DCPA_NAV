@@ -20,6 +20,14 @@ def generate_launch_description():
         'enable_lidar_filter', default_value='false',
         description='Enable /livox/lidar -> /livox/lidar_no_body filtering for the linefit pipeline.')
 
+    config_file_arg = DeclareLaunchArgument(
+        'config_file',
+        default_value=PathJoinSubstitution([
+            FindPackageShare('point_lio'),
+            'config', 'mid360.yaml'
+        ]),
+        description='Point-LIO YAML config file path.')
+
     # This filter is only needed by the legacy linefit segmentation path.
     filter_node = Node(
         package='rm_lidar_filter',
@@ -32,10 +40,7 @@ def generate_launch_description():
 
     # Node parameters, including those from the YAML configuration file
     laser_mapping_params = [
-        PathJoinSubstitution([
-            FindPackageShare('point_lio'),
-            'config', 'mid360.yaml'
-        ]),
+        LaunchConfiguration('config_file'),
         {
             'use_imu_as_input': False,  # Change to True to use IMU as input of Point-LIO
             'use_sim_time': LaunchConfiguration('use_sim_time'),
@@ -83,6 +88,7 @@ def generate_launch_description():
         use_sim_time_arg,
         rviz_arg,
         enable_lidar_filter_arg,
+        config_file_arg,
         filter_node,
         laser_mapping_node,
         # GroupAction(

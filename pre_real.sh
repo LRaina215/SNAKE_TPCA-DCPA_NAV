@@ -23,7 +23,7 @@ LOG_DIR="${AUTO_EVAL_LOG_DIR:-${SCRIPT_DIR}/.auto_eval_logs/pre_real}"
 tabs=(
   "Livox|ros2 launch livox_ros_driver2 msg_MID360_cloud_launch.py"
   "Description|ros2 launch rm_description model.launch.py"
-  "Point-LIO|ros2 launch point_lio mapping_mid360.launch.py use_sim_time:=False rviz:=false"
+  "Point-LIO|ros2 launch point_lio mapping_mid360.launch.py use_sim_time:=False rviz:=false config_file:=${SCRIPT_DIR}/rm_navi/rm_localization/point_lio/config/mid360_real.yaml"
   "OdomBridge|python3 ${SCRIPT_DIR}/rm_navi/rm_navigation/navi/launch/odom_to_base_node.py"
   "LidarFilter|ros2 run rm_lidar_filter lidar_filter"
   "Segmentation|ros2 launch linefit_ground_segmentation_ros segmentation_real.launch.py"
