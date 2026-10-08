@@ -1,1434 +1,220 @@
-## 面向动态环境下移动机器人平滑预测导航的各向异性时空风险场
+# SNAKE_TPCA-DCPA_NAV
 
-### 1. 项目目标
+**Anisotropic spatiotemporal risk field (TCPA/DCPA) for smooth predictive navigation of mobile robots in dynamic environments — a Nav2/DWB trajectory critic.**
 
-本项目的目标是在 `Nav2 + DWB` 局部控制框架下，为全向移动底盘增加一条轻量级动态障碍预测与风险评估链路，使机器人在动态环境中不再只根据“当前距离”避障，而是能够根据障碍物速度趋势提前规避，减少以下现象：
+This repository is the companion code for our ACIRS 2026 paper (first author). It implements a lightweight dynamic-obstacle prediction pipeline and a custom DWB trajectory critic that evaluates candidate velocities with a TCPA/DCPA-based risk field, plus hesitation-suppression extensions for decisive motion in dynamic encounters.
 
-- 动态障碍迎面或侧向来袭时的急停
-- 前进/后退反复切换造成的犹豫
-- 明明存在可通行空间却原地等待直到被撞
+## Overview
 
-当前实现已经不再是最初论文草案中的原始版本。由于仿真联调中暴露出误识别、轨迹抖动、侧向来袭时不敢提速等问题，算法和参数已经做过多轮修正。本文档记录的是当前代码实际行为，而不是最初设想版本。
+Conventional DWB local planners score trajectories mainly by instantaneous spatial distance to obstacles. In dynamic scenes this causes the well-known *freezing robot problem* and velocity hesitation: emergency stops in front of oncoming obstacles, forward/backward oscillation, or waiting in place despite passable space.
 
-### 2. 当前实现与最初论文方案的差异
+This work adds a lightweight prediction link to the `Nav2 + DWB` stack for an omnidirectional base:
 
-当前仿真版本与最初论文草案的差异如下：
+- **Dynamic obstacle tracking** — constant-velocity Kalman filtering over clustered obstacle point clouds, publishing filtered position/velocity estimates.
+- **TCPA/DCPA risk field** — time-to-closest-point-of-approach and distance-at-closest-point-of-approach form an anisotropic spatiotemporal risk cost on each sampled DWB trajectory.
+- **Hesitation-suppression extensions** — additional cost terms that penalize in-place waiting, reward lateral escape, prefer passing behind crossing obstacles, and suppress velocity direction flips.
 
-- 障碍物分割在仿真中已经切换为 `linefit_ground_segmentation_ros`
-- `Point-LIO` 在仿真中主要提供点云输出，不再承担导航里程计主来源
-- 仿真中的 `/odom` 直接由 Gazebo 提供
-- `ICP` 链路当前不参与仿真导航闭环
-- `Nav2` 的本地/全局代价地图当前都直接使用 Gazebo 提供的 `2D LaserScan` 话题 `/scan_nav`
-- 动态障碍链路输出的 `/tracked_obstacles` 当前只供自定义 `TCPADCPA` critic 使用，不直接喂给 Nav2 costmap
-- 自定义 critic 已不只是单纯的 TCPA/DCPA 风险项，还增加了抑制犹豫、鼓励侧向逃逸、鼓励沿目标方向脱困、抑制速度反向切换等附加代价
+In Gazebo dynamic-obstacle scenarios, the full method improved navigation success rate from **60% (standard DWB) to 100%**, with visibly smoother velocity profiles and fewer hesitation oscillations.
 
-换句话说，当前系统已经从“单一风险场公式验证”演化成了“预测风险 + 控制犹豫抑制”的实用版本。
+## Method
 
-### 3. 当前系统总体架构
+### 1. Lightweight dynamic obstacle tracking (`predictive_tracker`)
 
-#### 3.1 仿真导航主链
+A C++ ROS 2 node (`DynamicTrackerNode`) that turns segmented obstacle point clouds into tracked dynamic obstacles:
 
-当前推荐的仿真运行链路是：
+1. Transform input cloud to the `odom` frame and VoxelGrid-downsample it.
+2. Project to 2D and run Euclidean clustering; compute each cluster's 2D centroid.
+3. Associate clusters to tracks with nearest-neighbor + distance gating.
+4. Estimate `[x, y, vx, vy]` per track with a **constant-velocity Kalman filter**.
+5. Publish a track as a dynamic obstacle only after enough confirmed hits **and** consecutive frames above a speed threshold (suppresses ghost detections); short prediction coasting bridges brief occlusions.
 
-```text
-Gazebo
-  ├─ /odom ------------------------------> Nav2 / AMCL / controller
-  ├─ /scan_nav --------------------------> Nav2 local/global costmap
-  └─ /livox/lidar + /livox/imu ----------> Point-LIO
+Output: `/tracked_obstacles` (`predictive_navigation_msgs/TrackedObstacleArray`: id, filtered position, filtered velocity) and `/tracked_obstacle_markers` for RViz. Key parameters live in `predictive_tracker/config/dynamic_tracker.yaml`.
 
-Point-LIO
-  └─ /cloud_registered_body -------------> linefit_ground_segmentation_ros
+### 2. Anisotropic spatiotemporal risk field (`tcpa_dcpa_critic`)
 
-linefit_ground_segmentation_ros
-  └─ /segmentation/obstacle -------------> predictive_tracker
+A Nav2 DWB plugin (`tcpa_dcpa_critic::TCPADCPACritic : dwb_core::TrajectoryCritic`, registered via `tcpa_dcpa_critic.xml`) that subscribes to `/tracked_obstacles` and adds a risk score to every sampled trajectory.
 
-predictive_tracker
-  ├─ /tracked_obstacles -----------------> tcpa_dcpa_critic
-  └─ /tracked_obstacle_markers ----------> RViz
+For robot state `(p_r, v_r)` and obstacle state `(p_o, v_o)`, with relative position `p_rel = p_o − p_r` and relative velocity `v_rel = v_r − v_o`:
 
-Nav2 (DWB)
-  ├─ 标准 critics: Oscillation / BaseObstacle / PathDist / GoalDist ...
-  └─ 自定义 critic: TCPADCPA
+- If `p_rel · v_rel ≤ 0`, the trajectory is not closing on the obstacle → risk 0.
+- Otherwise compute time and distance of closest approach:
+
+```
+TCPA = (p_rel · v_rel) / ||v_rel||²
+DCPA = ||p_rel − TCPA · v_rel||
 ```
 
-这里有一个必须明确的事实：
+- Base risk cost:
 
-- `costmap` 走的是 `/scan_nav`
-- `动态风险评估` 走的是 `/tracked_obstacles`
-
-这两条链路当前是解耦的。这样做的原因是：仿真里直接把障碍分割点云作为代价地图输入时，受 `Point-LIO` 点云更新频率和时延影响，避障响应不够及时。
-
-补充说明：
-
-- `sim_pre.sh` 里仍会启动 `pointcloud_to_laserscan`，将 `/segmentation/obstacle` 投影为 `/scan`
-- 但当前仿真导航主配置中，`AMCL` 与 `local/global costmap` 实际使用的是 Gazebo 原生 `/scan_nav`
-- 因此 `/scan` 当前更多保留为兼容或对比观测接口，而不是主导航闭环输入
-
-#### 3.2 动态障碍物运动控制
-
-仿真环境中的动态障碍物由 `tcpa_sim_env/scripts/obstacle_mover.py` 控制。当前逻辑是：
-
-- 仿真启动后障碍物默认静止
-- 当系统第一次收到导航目标，或第一次收到非零 `cmd_vel` 后，障碍物才开始运动
-
-这样做是为了支持消融实验，避免机器人尚未开始导航时动态障碍物已经提前运动，影响单变量对比。
-
-### 4. 当前各包作用
-
-#### 4.1 `predictive_navigation_msgs`
-
-该消息包定义了动态障碍输出接口：
-
-```text
-TrackedObstacle.msg
-  int32 id
-  geometry_msgs/Point position
-  geometry_msgs/Vector3 velocity
-
-TrackedObstacleArray.msg
-  std_msgs/Header header
-  predictive_navigation_msgs/TrackedObstacle[] obstacles
+```
+Cost_risk = exp(−TCPA / τ_safe) · exp(−DCPA² / (2σ_safe²))
 ```
 
-其中：
+Risk is evaluated once per obstacle at the trajectory start, keeping the cost near **O(M)** in the number of dynamic obstacles.
 
-- `position` 是当前滤波后的障碍物位置
-- `velocity` 是当前滤波后的速度估计
-- `header.frame_id` 当前默认发布在 `odom`
+### 3. Hesitation-suppression extensions
 
-#### 4.2 `predictive_tracker`
+Pure TCPA/DCPA risk alone still hesitates or picks poor escape directions in close encounters. The critic therefore adds, under urgent-interaction conditions:
 
-`predictive_tracker` 是动态障碍前置跟踪节点，当前输入输出关系如下：
+| Term | Purpose |
+|---|---|
+| `hesitation_penalty` | Penalizes near-zero candidate speeds ("waiting it out") |
+| `lateral_escape_penalty` | Penalizes insufficient lateral escape velocity against side-approaching obstacles |
+| `goal_progress_penalty` | Penalizes trajectories that dodge but make poor progress toward the goal |
+| `escape_alignment_penalty` | Prefers combined forward + lateral escape directions |
+| `rear_passing_penalty` | Discourages mirroring a crossing obstacle's lateral motion; prefers passing behind it |
+| `swept_corridor_penalty` | Penalizes trajectories inside the obstacle's swept front corridor; prefers its wake region |
+| `direction_flip_penalty` | Suppresses candidate velocities opposing the current motion direction |
 
-- 输入：`/segmentation/obstacle`
-- 输出：`/tracked_obstacles`
-- 可视化：`/tracked_obstacle_markers`
+Net behavior: instead of merely "staying farther from obstacles", the planner prefers **decisive lateral escapes and passing behind crossing obstacles**.
 
-当前实现流程：
+### 4. DWB integration
 
-1. 将输入点云变换到目标坐标系 `odom`
-2. 进行 `VoxelGrid` 下采样
-3. 将点云压平到二维平面后做欧氏聚类
-4. 对每个聚类计算二维质心
-5. 使用最近邻 + 距离阈值做 track 关联
-6. 对每个 track 使用常速度模型 Kalman Filter 估计 `x, y, vx, vy`
-7. 仅在轨迹满足“稳定出现 + 速度足够大”后才发布为动态障碍
-
-当前用于减少“幽灵点/误识别标记”的关键机制有：
-
-- `min_confirmed_hits`：轨迹必须累计足够命中帧才允许发布
-- `min_dynamic_hits`：必须连续满足速度阈值若干帧才认定为动态障碍
-- `dynamic_speed_threshold`：低速或静止聚类不发布
-- `publish_prediction_missed_frames`：短时丢失时允许继续发布预测结果，减少转向时瞬时掉跟踪
-- `input_timeout_sec`：输入点云长时间断流时清空旧障碍，避免陈旧数据留存
-- `publish_rate_hz`：跟踪结果按较高频率重发，降低 DWB 看到障碍速度信息过稀的问题
-
-当前默认参数位于：
-
-- `predictive_tracker/config/dynamic_tracker.yaml`
-
-当前仿真参数核心值为：
-
-- `input_topic: /segmentation/obstacle`
-- `target_frame: odom`
-- `voxel_leaf_size: 0.1`
-- `cluster_tolerance: 0.35`
-- `association_distance_threshold: 0.8`
-- `min_confirmed_hits: 3`
-- `min_dynamic_hits: 2`
-- `dynamic_speed_threshold: 0.20`
-- `publish_rate_hz: 20.0`
-- `publish_prediction_missed_frames: 2`
-
-#### 4.3 `tcpa_dcpa_critic`
-
-`tcpa_dcpa_critic` 是挂载到 DWB 中的自定义 trajectory critic。它订阅 `/tracked_obstacles`，对每条速度采样轨迹进行附加评分。
-
-##### 基础风险模型
-
-设机器人采样轨迹起点位置与速度为：
-
-- `p_r = (x_r, y_r)`
-- `v_r = (v_rx, v_ry)`
-
-动态障碍物位置与速度为：
-
-- `p_o = (x_o, y_o)`
-- `v_o = (v_ox, v_oy)`
-
-定义相对量：
-
-```text
-p_rel = p_o - p_r
-v_rel = v_r - v_o
-```
-
-若：
-
-```text
-p_rel · v_rel <= 0
-```
-
-则认为当前采样轨迹相对该障碍物没有接近趋势，风险记为 0。
-
-否则计算：
-
-```text
-TCPA = (p_rel · v_rel) / ||v_rel||^2
-DCPA = ||p_rel - TCPA * v_rel||
-```
-
-基础风险项为：
-
-```text
-Cost_risk = exp(-TCPA / tau_safe) * exp(-DCPA^2 / (2 * sigma_safe^2))
-```
-
-当前实现中，critic 对每个障碍物只计算一次风险，不再沿整条采样轨迹逐点积分。这样将复杂度压到了近似 `O(M)`，其中 `M` 为动态障碍物数量。
-
-##### 当前版本新增的控制稳定性项
-
-单纯的 TCPA/DCPA 风险在仿真中会出现两个典型问题：
-
-- 明明有可逃逸空间，但机器人仍然犹豫不决
-- 侧向障碍来袭时，机器人在前后方向来回切换而不是果断横移或带前向分量脱困
-
-因此当前 critic 在“紧急交互”场景下又增加了以下附加项：
-
-- `hesitation_penalty`
-  - 当当前候选轨迹速度过小，惩罚“停在原地等”的解
-- `lateral_escape_penalty`
-  - 当障碍主要来自左右侧而轨迹横向脱离速度不足时加罚
-- `goal_progress_penalty`
-  - 当轨迹虽然在避障，但沿目标方向的推进速度太差时加罚
-- `escape_alignment_penalty`
-  - 偏好“朝目标前进 + 侧向脱离”的组合方向，而不是纯粹乱躲
-- `rear_passing_penalty`
-  - 当前方障碍物发生明显横穿时，惩罚机器人与障碍物沿同一横向方向“跟随式移动”，鼓励从其后方通过
-- `swept_corridor_penalty`
-  - 在关键预测时刻构造障碍物扫掠走廊，对仍落在障碍物前扫区域内的候选轨迹加罚，进一步偏好进入障碍物尾迹区域
-- `direction_flip_penalty`
-  - 抑制当前速度方向与候选速度方向相反的采样，减少前后抖动
-
-因此，当前版本的 `TCPADCPA` 更准确地说是：
-
-- 基础层：时空预测风险评估
-- 工程层：犹豫抑制、反跟随约束与后穿偏好
-
-补充说明：
-
-- 当前 critic 已不再只表达“离障碍远一点”
-- 在前方横穿场景下，它还会显式区分“障碍物前扫区域”和“障碍物后方尾迹区域”
-- 因此机器人当前的预期行为，已经从单纯侧移避让，进一步演化为“优先选择从动态障碍后方穿越”
-
-当前核心参数位于：
-
-- `rm_navi/rm_navigation/navi/params/nav2_params.yaml`
-
-当前仿真中启用的关键参数包括：
-
-- `TCPADCPA.scale: 10.0`
-- `TCPADCPA.tau_safe: 2.0`
-- `TCPADCPA.sigma_safe: 0.8`
-- `TCPADCPA.max_obstacle_age: 0.5`
-- `TCPADCPA.min_obstacle_speed: 0.05`
-- `TCPADCPA.hesitation_speed_threshold: 1.0`
-- `TCPADCPA.hesitation_penalty_scale: 2.0`
-- `TCPADCPA.urgency_tcpa_threshold: 1.2`
-- `TCPADCPA.urgency_dcpa_threshold: 1.2`
-- `TCPADCPA.lateral_escape_penalty_scale: 3.5`
-- `TCPADCPA.lateral_escape_speed_threshold: 1.6`
-- `TCPADCPA.lateral_escape_ratio: 1.15`
-- `TCPADCPA.goal_progress_penalty_scale: 2.0`
-- `TCPADCPA.goal_progress_speed_threshold: 1.2`
-- `TCPADCPA.escape_alignment_penalty_scale: 2.8`
-- `TCPADCPA.escape_alignment_speed_threshold: 1.8`
-- `TCPADCPA.escape_lateral_weight: 1.8`
-- `TCPADCPA.rear_passing_penalty_scale: 4.0`
-- `TCPADCPA.crossing_front_min_forward_distance: 0.35`
-- `TCPADCPA.crossing_front_max_lateral_offset: 1.4`
-- `TCPADCPA.crossing_obstacle_lateral_speed_threshold: 0.35`
-- `TCPADCPA.crossing_obstacle_lateral_dominance_ratio: 1.1`
-- `TCPADCPA.swept_corridor_penalty_scale: 3.2`
-- `TCPADCPA.swept_corridor_half_width: 0.85`
-- `TCPADCPA.rear_tail_margin: 0.25`
-- `TCPADCPA.direction_flip_penalty_scale: 1.5`
-- `TCPADCPA.direction_flip_speed_threshold: 0.05`
-
-### 5. 当前局部控制器的真实工作方式
-
-当前局部控制器是 `DWBLocalPlanner`，并已按全向平移底盘进行配置：
-
-- `max_vel_theta = 0.0`
-- `vtheta_samples = 1`
-- `yaw_goal_tolerance = 6.28`
-
-这意味着当前系统默认不依赖原地旋转来修正姿态，而是用全向平移完成避障与到达目标。
-
-当前 DWB 评分链为：
+The local planner is `DWBLocalPlanner`, configured for an omnidirectional base (no in-place rotation), with the critic chain:
 
 ```yaml
 critics: ["Oscillation", "BaseObstacle", "TCPADCPA", "GoalAlign", "PathAlign", "PathDist", "GoalDist"]
 ```
 
-需要特别注意：
+`BaseObstacle` handles static geometric safety; `TCPADCPA` handles dynamic spatiotemporal risk and hesitation suppression; `PathDist`/`GoalDist` keep global task progress. The dynamic-risk chain (`/tracked_obstacles`) is intentionally decoupled from the costmap input.
 
-- `BaseObstacle` 主要负责静态几何碰撞安全
-- `TCPADCPA` 主要负责动态障碍时空风险与犹豫抑制
-- `PathDist / GoalDist` 负责保持全局任务推进
+## Key results
 
-也就是说，当前局部规划效果不是某一个 critic 单独决定的，而是几类代价共同平衡的结果。
+Gazebo experiments with dynamic obstacles (crossing, narrow-corridor, and random-crowd scenarios; obstacles start moving on first navigation goal for clean ablations):
 
-### 6. 当前仿真运行方式
+- **Goal-reaching rate: 60.0% → 100.0%** vs. standard DWB in the main dynamic-crossing scenario.
+- **Collision count: 0.98 → 0.40** per trial on average.
+- **Longitudinal velocity sign-flip count: 13.6 → 9.0** (a hesitation metric on `cmd_vel`); smoother `vx` profiles (see `ablation_eval_output/smoothness_plots/`).
+- Sharper, more decisive lateral escapes against side-approaching obstacles; emergent "pass behind the crossing obstacle" behavior.
+- Critic scoring overhead stays lightweight: per-obstacle single evaluation, O(M) complexity (see `ablation_eval_output/paper_overhead_table.csv`).
 
-#### 6.1 推荐启动
+Ablation configurations: `Full` (this method) vs `DWB Baseline` (native critics only) vs `DWB RiskOnly` (base risk field without the hesitation extensions) vs `TEB` (cross-planner reference).
 
-终端 1：
+## Repository structure
+
+```
+SNAKE_TPCA-DCPA_NAV/
+├── tcpa_dcpa_critic/          # DWB plugin: TCPA/DCPA risk critic (C++)
+├── predictive_tracker/        # Dynamic obstacle tracking node (C++)
+│   ├── config/dynamic_tracker.yaml
+│   └── launch/dynamic_tracker.launch.py
+├── predictive_navigation_msgs/# TrackedObstacle / TrackedObstacleArray messages
+├── tcpa_sim_env/              # Gazebo simulation: worlds, obstacle mover, launch
+│   ├── worlds/{dynamic_test,narrow_corridor,random_crowd}.world
+│   └── scripts/obstacle_mover.py
+├── rm_navi/                   # Full navigation stack (rm_navigation, rm_perception,
+│                              # rm_localization, smart_escape, ...)
+├── costmap_converter/         # Costmap utilities
+├── livox_laser_simulation_ros2/
+├── rm_communication/          # Upper/lower-computer communication packages
+├── rm_description/            # Robot description
+├── sim_pre.sh / sim_nav.sh    # Recommended simulation bring-up (see Quick start)
+├── sim_nav_dwb_baseline.sh / sim_nav_dwb_risk_only.sh / sim_nav_teb.sh
+├── sim_pre_narrow.sh / sim_pre_random.sh / sim_nav_narrow.sh ...  # multi-scenario
+├── run_ablation_eval.py       # Automated ablation evaluation → CSV tables
+├── prepare_paper_tables.py    # Derives paper-ready tables from raw trial CSVs
+├── extract_bag_to_csv.py / plot_smoothness.py / plot_trajectory.py
+├── ablation_eval_output/      # Paper tables (CSV) and smoothness/trajectory plots
+└── docs/
+    └── old-readme.md          # Archived: the original development-notes README
+```
+
+## Dependencies
+
+- ROS 2 (the repo's scripts target **Galactic**)
+- Nav2 stack (`nav2_bringup`, `dwb_core`, `nav2_costmap_2d`, `pluginlib`)
+- PCL (`pcl`, `pcl_conversions`) and Eigen (tracking node)
+- Gazebo 11 (Gazebo classic — the latest Gazebo release available on Ubuntu 20.04) with ROS 2 integration for simulation
+- Python 3 with `numpy`, `matplotlib` (evaluation/plotting scripts)
+
+## Build
 
 ```bash
-cd /home/lraina/auto_shao/src
+# clone this repo into your colcon workspace's src/ directory, e.g.:
+cd ~/auto_shao/src
+git clone https://github.com/LRaina215/SNAKE_TPCA-DCPA_NAV.git
+cd ~/auto_shao
+colcon build --symlink-install
+source install/setup.bash
+```
+
+The `sim_*.sh` scripts are run from the repository root (the workspace working directory) — see Quick start.
+
+## Quick start (simulation)
+
+Terminal 1 — perception & tracking stack:
+
+```bash
+cd <path-to-this-repo>
 ./sim_pre.sh
 ```
 
-该脚本会启动：
+This launches the Gazebo world (`tcpa_sim_env`), Point-LIO, ground segmentation, `predictive_tracker`, and pointcloud-to-laserscan.
 
-- `tcpa_sim_env sim_launch.py`
-- `point_lio mapping_mid360.launch.py`
-- `linefit_ground_segmentation_ros segmentation.launch.py`
-- `predictive_tracker dynamic_tracker.launch.py`
-- `pointcloud_to_laserscan pointcloud_to_laserscan_launch.py`
-
-其中最后一个节点当前不是仿真主导航闭环的核心输入，主导航仍使用 `/scan_nav`。
-
-终端 2：
+Terminal 2 — Nav2 with the full method:
 
 ```bash
-cd /home/lraina/auto_shao/src
+cd <path-to-this-repo>
 ./sim_nav.sh
 ```
 
-该脚本会启动：
+Then send a navigation goal in RViz. **Note:** dynamic obstacles stay still until the first goal (or first non-zero `cmd_vel`) is received — this is intentional for clean ablations, not a bug.
 
-- `localization_launch.py`
-- `map -> odom` 静态 TF
-- `Nav2`
-- `RViz`
+Key topics to watch: `/odom`, `/cmd_vel`, `/scan_nav`, `/segmentation/obstacle`, `/tracked_obstacles`, `/tracked_obstacle_markers`.
 
-#### 6.2 运行中的关键话题
+Ablation variants (swap terminal 2's script):
 
-当前建议重点观察以下话题：
+| Script | Configuration |
+|---|---|
+| `sim_nav.sh` | Full method (TCPA/DCPA + hesitation extensions) |
+| `sim_nav_dwb_baseline.sh` | DWB baseline (native critics only) |
+| `sim_nav_dwb_risk_only.sh` | DWB + base risk field, extensions off |
+| `sim_nav_teb.sh` | TEB reference |
 
-- `/odom`
-- `/cmd_vel`
-- `/scan_nav`
-- `/segmentation/obstacle`
-- `/tracked_obstacles`
-- `/tracked_obstacle_markers`
+Narrow-corridor / random-crowd scenarios: use `sim_pre_narrow.sh` + `sim_nav_narrow.sh`, or `sim_pre_random.sh` + corresponding nav scripts.
 
-#### 6.3 现象解释
-
-如果你在 RViz 里设置导航点后障碍物才开始移动，这是当前的预期行为，不是故障。
-
-### 7. 消融实验入口
-
-当前已经准备了三组 DWB 消融配置，以及一组可选的 TEB 对照基线：
-
-- `Full`
-  - 使用当前工作参数 `nav2_params.yaml`
-- `DWB Baseline`
-  - 去掉 `TCPADCPA`，只保留原生 DWB critics
-- `DWB RiskOnly`
-  - 保留 `TCPADCPA` 基础风险项，但关闭犹豫惩罚、侧向逃逸、目标推进、方向对齐、方向翻转惩罚
-- `TEB Baseline`
-  - 使用 `teb_local_planner`
-  - 仍沿用当前仿真中的 `/scan_nav` 局部代价地图输入
-  - 当前为了保证 ROS 2 Galactic 下批量实验稳定性，采用标准 costmap obstacle 方式，不启用 `CostmapToDynamicObstacles` 动态转换线程
-
-对应参数文件：
-
-- `rm_navi/rm_navigation/navi/params/nav2_params.yaml`
-- `rm_navi/rm_navigation/navi/params/nav2_params_dwb_baseline.yaml`
-- `rm_navi/rm_navigation/navi/params/nav2_params_dwb_risk_only.yaml`
-- `rm_navi/rm_navigation/navi/params/nav2_params_teb.yaml`
-
-对应仿真启动脚本：
+## Reproducing the paper experiments
 
 ```bash
-./sim_nav.sh
-./sim_nav_dwb_baseline.sh
-./sim_nav_dwb_risk_only.sh
-./sim_nav_teb.sh
-```
-
-新增的多场景预启动与导航脚本为：
-
-```bash
-./sim_pre_narrow.sh
-./sim_pre_random.sh
-./sim_nav_narrow.sh
-./sim_nav_dwb_baseline_narrow.sh
-./sim_nav_teb_narrow.sh
-```
-
-它们的分工是：
-
-- `sim_pre_narrow.sh`
-  - 启动 `narrow_corridor.world`
-  - 对应狭窄走廊场景
-- `sim_pre_random.sh`
-  - 启动 `random_crowd.world`
-  - 对应开阔场中的多障碍随机乱步场景
-- `sim_nav_narrow.sh`
-  - 使用 `narrow_corridor_map.yaml`
-  - 供当前 `Full` 方法在狭窄走廊场景中评测
-- `sim_nav_dwb_baseline_narrow.sh`
-  - 使用同一张走廊地图
-  - 供 `Baseline` 在狭窄走廊场景中做平滑性/犹豫现象对照
-- `sim_nav_teb_narrow.sh`
-  - 使用同一张走廊地图
-  - 供 `TEB` 在狭窄走廊场景中做额外对照
-
-推荐对比关系：
-
-- `Full vs Baseline`
-  - 验证自定义动态障碍 critic 是否有效
-- `Full vs RiskOnly`
-  - 验证后续加入的“抑制犹豫/促进脱困”机制是否有效
-- `Full vs TEB`
-  - 验证所提 DWB 增强方法相对主流动态避障局部规划器的通过表现与计算开销优势
-
-#### 7.0 速度平滑性对比实验（Baseline vs Full）
-
-为了支撑论文中关于 `Smoothness` 的现象图，当前仓库额外提供了一套“手动发目标 + 自动录 rosbag”的轻量脚本：
-
-- `run_smoothness_exp.sh`
-- `record_smoothness_bag.sh`
-
-它们的用途是：
-
-- 快速启动 `sim_pre + 指定导航栈`
-- 自动开始录制画 `Time vs Velocity` 折线图所需的话题
-- 用同一套录制流程分别采集 `Baseline` 与 `Full` 的速度曲线
-
-推荐的两组命令分别是：
-
-```bash
-./run_smoothness_exp.sh baseline
-./run_smoothness_exp.sh full
-```
-
-脚本默认行为如下：
-
-1. 启动 `sim_pre.sh`
-2. 根据参数启动对应导航栈
-   - `baseline -> ./sim_nav_dwb_baseline.sh`
-   - `full -> ./sim_nav.sh`
-3. 自动调用 `record_smoothness_bag.sh`
-4. 在终端中持续录制 rosbag，等待你在 RViz 手动点击目标点
-
-当前 `record_smoothness_bag.sh` 默认录制的话题为：
-
-- `/odom`
-- `/cmd_vel`
-- `/plan`
-- `/local_plan`
-- `/tracked_obstacles`
-- `/obs1/cmd_vel`
-- `/obs2/cmd_vel`
-- `/tf`
-- `/tf_static`
-- `/clock`
-
-其中最关键的是：
-
-- `/cmd_vel`
-  - 用于画控制器输出的线速度/角速度曲线
-  - 最能体现 `Baseline` 中的前后抖动、锯齿式调速等问题
-- `/odom`
-  - 用于画机器人实际执行速度曲线
-  - 也可用于和 `/cmd_vel` 对照，观察控制输出是否真正落到了底盘运动上
-
-推荐操作流程：
-
-1. 运行 `./run_smoothness_exp.sh baseline`
-2. 等待 rosbag 开始录制
-3. 在 RViz 中手动发送一个典型动态障碍场景目标点
-4. 机器人完成一次导航后，在录包终端按 `Ctrl+C`
-5. 再运行 `./run_smoothness_exp.sh full`
-6. 用相同目标点再录一次
-
-录包默认保存在：
-
-- `~/auto_shao/data/smoothness_bags/`
-
-录完之后，可以直接用现有解析脚本导出 CSV：
-
-```bash
-python3 extract_bag_to_csv.py ~/auto_shao/data/smoothness_bags/<your_bag_name>
-```
-
-当前解析结果会至少导出：
-
-- `robot_odom.csv`
-  - 包含 `time, x, y, yaw, vx, vy, wz`
-- `cmd_vel.csv`
-  - 包含 `time, vx_cmd, vy_cmd, vz_cmd, wx_cmd, wy_cmd, wz_cmd`
-
-因此后续无论你使用 `PlotJuggler`、`matplotlib`、MATLAB 还是 Excel，都可以直接画出：
-
-- `time vs vx_cmd`
-- `time vs wz_cmd`
-- `time vs vx`
-- `time vs wz`
-
-论文中建议的现象表达是：
-
-- `Baseline`
-  - 线速度在 `0` 与较大值之间频繁切换
-  - 角速度或控制输出呈现更明显的锯齿/抖动
-- `Full`
-  - 曲线过渡更连续
-  - 加减速更平滑，前后符号翻转明显减少
-
-如果你希望把这组 smoothness 图切换到 `narrow_corridor` 场景，当前仓库还提供了专门的启动脚本：
-
-```bash
-./run_smoothness_narrow.sh baseline
-./run_smoothness_narrow.sh full
-```
-
-其默认流程为：
-
-1. 启动 `sim_pre_narrow.sh`
-2. 启动狭窄走廊对应导航栈
-   - `baseline -> sim_nav_dwb_baseline_narrow.sh`
-   - `full -> sim_nav_narrow.sh`
-3. 自动调用 `record_smoothness_bag.sh`
-4. 等待你在 RViz 中发送同一目标点
-
-推荐这个场景的原因是：
-
-- 横向机动空间更受限
-- `Full` 的侧移行为不会像十字交汇场景那样主导整条速度曲线
-- 更容易把对比重点集中在“纵向是否犹豫、是否反复试探”上
-
-对于 `narrow_corridor` 的 smoothness 图，建议统一采用以下口径：
-
-- 起点：机器人默认出生点 `(-4.0, 0.0)` 附近
-- 终点：在 RViz 中手动发送到 `(4.0, 0.0)` 或其附近
-- 每个方法只录制一轮代表性通过过程
-- 若 `Baseline` 已在中途碰撞并进入“被撞停后的平线段”，后处理绘图时只截取碰撞前的交互窗口
-
-当前仓库也补充了两步式的平滑性出图脚本：
-
-```bash
-python3 prepare_smoothness_data.py
-python3 plot_smoothness.py --baseline <baseline_csv_dir> --full <full_csv_dir>
-```
-
-其中：
-
-- `prepare_smoothness_data.py`
-  - 会扫描 `smoothness_bags` 下全部 `*_csv`
-  - 自动裁掉静止段
-  - 生成 `smoothness_merged.csv` 等处理结果
-- `plot_smoothness.py`
-  - 会基于处理后的 CSV 生成论文用对比图
-  - 当前主图推荐使用：
-    - `smoothness_vx_comparison.png`
-  - 该图重点对比 `vx_cmd / vx`
-  - 用来量化“前后犹豫、纵向反复试探”是否被抑制
-
-如果 `Baseline` 在某一轮里已经碰撞并进入“被撞停后的平线段”，为了避免失公允，建议只截取碰撞前的交互窗口：
-
-```bash
-python3 plot_smoothness.py \
-  --baseline <baseline_csv_dir> \
-  --full <full_csv_dir> \
-  --baseline-end 6.5 \
-  --full-end 6.5
-```
-
-也就是说，当前 smoothness 图的推荐口径不是整轮的“总速度模长绝对更平”，而是：
-
-- `Baseline` 是否存在更明显的纵向速度反复试探
-- `Full` 是否能在保持通过能力的同时减少前后犹豫
-
-当前这版论文最终推荐采用的 smoothness 主图为：
-
-- `ablation_eval_output/smoothness_plots/paper_smoothness_vx_comparison.png`
-- `ablation_eval_output/smoothness_plots/paper_smoothness_vx_comparison.pdf`
-
-对应的数据与绘图口径为：
-
-- `Baseline`
-  - `baseline_smoothness_20260404_191231_csv`
-- `Full`
-  - `full_smoothness_20260404_191333_csv`
-- 绘图窗口
-  - `--baseline-end 8.0`
-  - `--full-end 8.0`
-
-对应命令为：
-
-```bash
-python3 plot_smoothness.py \
-  --baseline baseline_smoothness_20260404_191231_csv \
-  --full full_smoothness_20260404_191333_csv \
-  --baseline-end 8.0 \
-  --full-end 8.0
-```
-
-选择这张图的原因是：
-
-- `Baseline` 在该交互窗口中出现了明显的纵向指令极性翻转
-- `Full` 则呈现“减速 - 短暂停留 - 恢复前进”的连续决策过程
-- 该图更适合支撑“抑制前后犹豫、减少突发式反向试探”这一论点
-
-因此，论文正文对这张图的推荐表述不是“Full 在任何意义下都更平”，而是：
-
-- `Baseline` 更容易在动态交互中出现突发式前后试探
-- `Full` 更容易保持纵向决策连续性，并减少犹豫导致的反向切换
-
-### 8.1 实机验证推荐工作流
-
-在当前仓库中，最推荐的做法是不再直接复用 `sim_pre.sh / sim_nav.sh`，而是将仿真与实机工作流彻底分开：
-
-- 仿真工作流
-  - 继续使用 `sim_pre.sh`、`sim_nav.sh` 及各类 `sim_*` 脚本
-  - 服务于论文复现实验、消融对照和自动评测
-- 实机工作流
-  - 使用新增的 `pre_real.sh`
-  - 使用新增的 `nav_real.sh`
-  - 使用新增的 `rm_navi/rm_navigation/navi/params/nav2_params_real_full.yaml`
-
-当前这套实机推荐方案的原则是：
-
-- 恢复 `Point-LIO` 作为主里程计来源
-- 恢复 `ICP` 参与 `map -> odom` 闭环修正
-- 保留 `linefit_ground_segmentation_ros` 作为障碍物分割链路
-- 保留 `predictive_tracker -> /tracked_obstacles -> TCPADCPA critic` 这条动态风险链
-- 保持 `costmap` 与 `tracked_obstacles` 解耦
-  - `costmap` 使用高频 `/scan`
-  - `critic` 使用 `/tracked_obstacles`
-
-推荐启动顺序为：
-
-```bash
-./pre_real.sh
-./nav_real.sh
-```
-
-其中：
-
-- `pre_real.sh`
-  - 启动 `livox_ros_driver2`
-  - 启动机器人模型
-  - 启动 `Point-LIO`
-  - 启动 `odom_to_base_node.py`，将 `/odom_livox` 桥接为 Nav2 使用的 `/odom`
-  - 启动 `linefit_ground_segmentation_ros`
-  - 启动 `predictive_tracker`
-  - 启动 `pointcloud_to_laserscan`，输出实机 `costmap` 使用的 `/scan`
-- `nav_real.sh`
-  - 启动 `ICP`
-  - 启动 `localization_launch.py`
-  - 启动 `navigation_launch.py`
-  - 默认读取 `nav2_params_real_full.yaml`
-
-`nav_real.sh` 还支持通过环境变量覆盖地图和参数文件：
-
-```bash
-REAL_MAP_FILE=/path/to/your_map.yaml \
-REAL_NAV_PARAMS_FILE=/path/to/your_params.yaml \
-./nav_real.sh
-```
-
-当前最推荐的实机初版参数文件是：
-
-- `rm_navi/rm_navigation/navi/params/nav2_params_real_full.yaml`
-
-它与仿真版 `nav2_params.yaml` 的主要区别是：
-
-- 全部切回 `use_sim_time: false`
-- 去掉仿真用的 `/scan_nav`
-- 恢复实机 `costmap` 使用 `/scan`
-- 保留当前 `Full` 版 `TCPADCPA` critic 逻辑
-- 将速度上限、加速度上限和所有与速度相关的 critic 阈值缩回实机保守范围
-
-因此，当前最推荐的上机联调顺序是：
-
-1. 只启动 `pre_real.sh`，先检查：
-   - `/odom`
-   - `/segmentation/obstacle`
-   - `/tracked_obstacles`
-2. 再启动 `nav_real.sh`，检查：
-   - `map -> odom`
-   - `odom -> base_link`
-   - `/scan`
-3. 先做静态导航
-4. 最后再引入动态障碍做 `Full` 方法验证
-
-#### 7.1 自动化消融评测脚本
-
-为了减少手工重复启动仿真、发送目标点和统计数据的工作量，当前仓库中新增了自动评测脚本：
-
-- `run_ablation_eval.py`
-
-该脚本的用途是：
-
-- 在 Gazebo 仿真中自动运行三组 DWB 消融实验
-- 对每组配置重复执行多轮导航任务
-- 自动统计论文定量对比所需指标
-- 直接导出可用于论文表格整理的 CSV 文件
-
-如果需要把 `TEB` 也加入同一套自动流程，可通过命令行参数追加这一组对照基线。
-
-该脚本对应的实验目的，是验证以下两个问题：
-
-- `Baseline -> RiskOnly -> Full` 这三组方法的性能差异是否稳定存在
-- 你后续增加的“犹豫抑制、侧向逃逸、方向翻转惩罚”等工程增强项，是否确实改善了动态交互场景中的局部控制表现
-
-自动评测脚本默认调用的实验分组为：
-
-- `Group A / Baseline`
-  - 调用 `./sim_nav_dwb_baseline.sh`
-  - 仅保留原生 DWB critics
-- `Group B / RiskOnly`
-  - 调用 `./sim_nav_dwb_risk_only.sh`
-  - 引入 TCPA/DCPA 基础风险场，但关闭犹豫抑制等增强项
-- `Group C / Full`
-  - 调用 `./sim_nav.sh`
-  - 使用当前全功能版本
-
-可选附加分组为：
-
-- `Group D / TEB`
-  - 调用 `./sim_nav_teb.sh`
-  - 使用 `teb_local_planner` 作为局部控制器
-  - 用于和 `Full` 做跨控制器对照，而不是替代前三组 DWB 消融组
-
-当前默认实验设置为：
-
-- 机器人初始位姿：`(-4.0, 0.0)`
-- 导航目标点：`(4.0, 0.0)`
-- 单轮超时：`45 s`
-- 每组默认轮数：`50`
-
-脚本会自动完成以下流程：
-
-1. 为当前 trial 冷启动 `sim_pre.sh` 与对应导航配置
-2. 等待机器人确实出现在初始位姿附近后再开始本轮实验
-3. 通过 `NavigateToPose` action 自动下发目标点
-4. 利用 `reset_motion` 服务将动态障碍重新置于“等待首次目标后启动”的状态
-5. 在导航过程中持续监听 `/odom`、`/cmd_vel`、障碍物位置相关话题
-6. 在成功、失败或超时后记录本轮结果
-7. 强制清理残留 Gazebo / Nav2 / tracker 进程后再进入下一轮
-
-这里要特别说明：
-
-- 当前正式评测默认是“每轮冷启动”，而不是复用上一轮的仿真栈
-- 这样做是为了避免残留进程、旧 action 状态或旧 costmap 数据污染后续 trial
-- 这一点对消除早期出现过的“极短时间伪成功”现象非常关键
-
-当前默认统计的核心指标包括：
-
-- `Success Rate`
-- `Collision Count`
-- `Mean Navigation Time`
-- `Average Translational Speed`
-- `Minimum Clearance`
-- `Velocity Sign-Flip Count`
-- `Algorithm Latency`
-
-这些指标当前的含义需要特别说明：
-
-- `Success Rate`
-  - 仅表示该轮导航任务是否被评测脚本判定为成功到达目标
-  - 判定依据仍然是 `NavigateToPose` 返回结果、终点距离校验和最小路径长度校验
-  - 不再把“是否发生碰撞”直接并入 success 定义
-- `Collision Count`
-  - 单独统计一轮导航过程中发生了多少次碰撞事件
-  - 当前实现按“接触段”计数：进入一次碰撞状态记 1 次，持续接触不会在每个周期重复累加
-  - 该指标用于把“能到达”和“到达过程中撞了几次”拆开分析
-- `Velocity Sign-Flip Count`
-  - 用于量化机器人在动态障碍来袭时的前后抖动和犹豫行为
-  - 本质上统计短时间窗口内 `cmd_vel.x` 的正负号翻转次数
-- `Algorithm Latency`
-  - 用于统计局部规划相关模块的平均计算耗时
-  - `RiskOnly / Full` 当前记录的是 `tcpa_dcpa_critic` 的平均评分耗时
-  - `TEB` 当前记录的是 `teb_local_planner` 的平均规划调用耗时
-
-因此，当前脚本导出的结果应按下面的方式解读：
-
-- `success` / `Success Rate` 回答的是“这轮有没有到达目标”
-- `collision_count` 回答的是“这轮到达或失败过程中撞了多少次”
-- 两者是并列指标，而不是互相覆盖的单一指标
-
-除此之外，脚本当前还增加了两层结果有效性校验：
-
-- 只有 `NavigateToPose` 返回 `SUCCEEDED` 且机器人最终距离目标足够近时，才记为成功
-- 只有本轮 `odom` 路径长度超过最小阈值时，才记为有效成功
-
-这样可以避免把“旧状态残留”或“几乎没动就返回成功”的异常轮次误记进统计表。
-
-运行方式如下：
-
-```bash
-cd /home/lraina/auto_shao/src
 source /opt/ros/galactic/setup.bash
-source ../install/setup.bash
-python3 run_ablation_eval.py
-```
+source <workspace>/install/setup.bash
 
-如果只想先做快速检查，可以先运行：
-
-```bash
+# quick smoke test: 1 trial per group
 python3 run_ablation_eval.py --trials-per-group 1
-```
 
-如果你发现自动评测里 `tracker_latency_ms` 经常为空，说明当前这轮自动实验没有稳定收到
-`/segmentation/obstacle`。这种情况在纯 headless 预栈中偶尔会出现。此时建议先切换为：
-
-```bash
-python3 run_ablation_eval.py --trials-per-group 1 --pre-stack-gui
-```
-
-该参数的作用是：
-
-- `--pre-stack-gui`
-  - 让 `sim_pre.sh` 以带 Gazebo GUI 的方式启动，而不是强制 headless
-  - 仅用于提高前端感知链路（Livox / Point-LIO / linefit / tracker）在自动实验中的稳定性
-  - 不改变导航算法本身，只改变自动评测时的仿真启动方式
-
-脚本当前还增加了前端就绪等待机制：
-
-- `--front-end-ready-timeout-s`
-  - 默认会在启动 pre-stack 后等待 `/segmentation/obstacle` 首帧
-  - 如果超时，脚本会打印 warning，提示该轮 `tracker_latency_ms` 可能为空
-  - 这类 warning 不影响导航主实验运行，但会影响 tracker latency 统计完整性
-
-正式生成论文统计表时，建议直接运行：
-
-```bash
+# full ablation (default 50 trials/group; add TEB with --include-teb)
 python3 run_ablation_eval.py --trials-per-group 50
-```
 
-如果要把 `TEB` 一并纳入对照，可运行：
+# multi-scenario robustness only
+python3 run_ablation_eval.py --skip-ablation --run-multi-scenario --multi-scenario-trials 20
 
-```bash
-python3 run_ablation_eval.py --trials-per-group 50 --include-teb
-```
-
-脚本默认输出目录为：
-
-- `ablation_eval_output/ablation_trials.csv`
-- `ablation_eval_output/ablation_results.csv`
-- `ablation_eval_output/paper_dynamic_test_table.csv`
-- `ablation_eval_output/paper_overhead_table.csv`
-- `ablation_eval_output/paper_multi_scenario_table.csv`
-- `ablation_eval_output/paper_multi_scenario_wide.csv`
-- `ablation_eval_output/logs/ablation/<group>/trial_xxx/sim_pre`
-- `ablation_eval_output/logs/ablation/<group>/trial_xxx/nav`
-其中：
-
-- `ablation_trials.csv`
-  - 保存每一轮实验的原始结果
-  - 适合后续手工排查异常轮次
-  - 当前关键列包括：
-    - `success`
-    - `outcome`
-    - `collision_count`
-    - `min_clearance_m`
-    - `velocity_sign_flip_count`
-    - `tracker_latency_ms`
-    - `algorithm_latency_ms`
-- `ablation_results.csv`
-  - 保存按实验组汇总后的均值与方差
-  - 可直接用于整理论文中的定量对比表
-  - 当前会额外汇总：
-    - `collision_count_mean / collision_count_var`
-    - `algorithm_latency_ms_mean / algorithm_latency_ms_var`
-    - `algorithm_latency_source`
-- `paper_dynamic_test_table.csv`
-  - 由 `prepare_paper_tables.py` 从真实原始 CSV 二次整理得到
-  - 只保留当前 `PLANS.md` 明确要求、且相对稳定可解释的主实验指标：
-    - `goal_reaching_rate_pct`
-    - `mean_navigation_time_s`
-    - `average_translational_speed_mps`
-    - `algorithm_latency_ms`
-- `paper_overhead_table.csv`
-  - 面向论文中的 `Computational Overhead / Table III`
-  - 提供：
-    - `tracker_latency_ms`
-    - `algorithm_latency_ms`
-    - `algorithm_latency_source`
-- `paper_multi_scenario_table.csv`
-  - 面向论文中的 `Performance in Multi-Scenarios`
-  - 当前保留每个场景、每个方法的：
-    - `trial_count`
-    - `success_count`
-    - `goal_reaching_rate_pct`
-- `paper_multi_scenario_wide.csv`
-  - 与上一份文件来源相同，但改成“按方法排列表格”的宽表形式
-  - 更适合直接粘到论文总表或 LaTeX 表格中
-  - 当前列名通常为：
-    - `narrow_corridor`
-    - `random_crowd`
-- `logs/ablation/<group>/trial_xxx/...`
-  - 保存每一轮独立 trial 的启动与导航日志
-  - 当某一轮出现 `aborted`、`timeout` 或异常成功时，可直接对照该轮日志核查
-
-当前建议的结果解读方式是：
-
-- `Success Rate`、`Collision Count`、`Mean Navigation Time`、`Average Translational Speed`、`Velocity Sign-Flip Count` 可以直接用于三组方法横向对比
-- `Minimum Clearance` 当前更适合做相对比较，而不是绝对碰撞真值
-- `Algorithm Latency` 可用于补充计算开销对照，但应在论文中明确写明其统计来源
-
-如果目标是直接整理当前论文表格，建议不要直接手改原始 CSV，而是运行：
-
-```bash
+# derive paper-ready tables from raw trial CSVs
 python3 prepare_paper_tables.py
 ```
 
-该脚本会保留原始实验数据不变，并额外生成三份“论文用派生表”：
+Outputs land in `ablation_eval_output/`: per-trial CSVs, `paper_dynamic_test_table.csv`, `paper_overhead_table.csv`, `paper_multi_scenario_table.csv` (+ `_wide` variant), and smoothness/trajectory plots. The committed CSVs/plots in `ablation_eval_output/` are the exact artifacts used for the paper tables.
 
-- `paper_dynamic_test_table.csv`
-  - 对应主场景四组对照表
-- `paper_overhead_table.csv`
-  - 对应延迟/计算开销表
-- `paper_multi_scenario_table.csv`
-  - 对应多场景成功率表
-- `paper_multi_scenario_wide.csv`
-  - 对应多场景结果的宽表版本，便于直接放到论文总表中
+## Citation
 
-这样做的目的是：
-
-- 不覆盖原始 trial 记录
-- 不对实验结果做人为篡改
-- 只把当前对论文真正有价值、且口径相对稳定的指标提炼出来
-
-原因是：
-
-- 当前环境中不稳定提供可直接使用的 Gazebo 真值 `model_states`
-- 因此 `Minimum Clearance` 在很多轮次里是基于 `/tracked_obstacles` 或解析轨迹得到的估计量
-- 该指标仍然有参考价值，但在论文里更适合表述为 `estimated minimum clearance`
-
-因此，这个脚本的定位不是“在线控制节点”，而是：
-
-- 一个面向论文消融实验的自动化评测工具
-- 用于批量生成 `Baseline / RiskOnly / Full` 三组方法的可复现实验数据
-- 在需要时也可追加 `TEB` 组，生成跨局部规划器对照数据
-- 对论文阶段，则优先从这些派生 CSV 取数，而不是直接手改原始 trial 记录
-
-#### 7.1.1 多场景鲁棒性评测
-
-除了原始十字交汇 `dynamic_test` 场景之外，当前还补充了两个额外场景，用于支撑论文里 `Performance in Multi-Scenarios` 这一列：
-
-- `narrow_corridor`
-  - 机器人在狭窄走廊内从 `(-4.0, 0.0)` 导航到 `(4.0, 0.0)`
-  - 前方有单个动态障碍沿走廊来回运动
-  - 用于验证空间受限时是否出现撞墙、僵住或无法超车
-- `random_crowd`
-  - 机器人仍从 `(-4.0, 0.0)` 导航到 `(4.0, 0.0)`
-  - 场中有 `obs1 ~ obs5` 五个圆柱障碍按固定随机种子乱步
-  - 当前障碍运动已扩展到近全场范围，并在运动层加入了邻近避让与边界回避，尽量减少障碍之间的相撞穿模
-  - 用于验证在多动态体干扰下的总体通过稳定性
-
-这两个场景仍然遵循当前仿真的统一触发逻辑：
-
-- Gazebo 场景加载完成后，障碍物默认先静止
-- 当第一次收到导航目标或非零 `/cmd_vel` 后，`obstacle_mover.py` 才开始运动
-- 每轮实验前都会调用 `reset_motion`，把障碍重新置回“等待首次目标触发”的状态
-
-如果只想运行多场景鲁棒性测试，而不重复执行 50 次 DWB 消融，可直接运行：
-
-```bash
-python3 run_ablation_eval.py --skip-ablation --run-multi-scenario --multi-scenario-trials 20
+```bibtex
+@inproceedings{luan2026anisotropic,
+  author    = {Junhui Luan and Yuqi Liang and Zixuan Lin and Zhong Huang},
+  title     = {Anisotropic Spatiotemporal Risk Field for Smooth Predictive Navigation of Mobile Robots in Dynamic Environments},
+  booktitle = {Proc.\ 11th Asia-Pacific Conference on Intelligent Robot Systems (ACIRS)},
+  year      = {2026},
+  note      = {to appear}
+}
 ```
 
-如果希望把 `TEB` 也一并加入多场景对照，可运行：
+> The proceedings are not yet indexed on IEEE Xplore — the citation above is a placeholder and will be updated with page numbers / DOI once available.
 
-```bash
-python3 run_ablation_eval.py --skip-ablation --run-multi-scenario --multi-scenario-trials 20 --include-teb
-```
+## License
 
-如果你希望把“原始消融 + 多场景鲁棒性”一次性全跑完，也可以直接追加同一个开关：
+This project is licensed under the Apache License 2.0 — see the [LICENSE](LICENSE) file for details.
 
-```bash
-python3 run_ablation_eval.py --trials-per-group 50 --run-multi-scenario --multi-scenario-trials 20
-```
+## Contact
 
-多场景模式的输出文件为：
+- Junhui Luan — 20243007059@hainanu.edu.cn
+- GitHub: [LRaina215](https://github.com/LRaina215)
 
-- `ablation_eval_output/multi_scenario_trials.csv`
-- `ablation_eval_output/multi_scenario_results.csv`
-- `ablation_eval_output/paper_multi_scenario_table.csv`
-- `ablation_eval_output/paper_multi_scenario_wide.csv`
-- `ablation_eval_output/logs/multi_scenario/<scene>/<group>/trial_xxx/sim_pre`
-- `ablation_eval_output/logs/multi_scenario/<scene>/<group>/trial_xxx/nav`
-
-其中：
-
-- `multi_scenario_trials.csv`
-  - 保存每个场景、每个方法、每一轮的原始结果
-- `multi_scenario_results.csv`
-  - 以 `scenario + group` 为索引统计汇总指标
-  - 当前最主要用于提取各场景的 `success_rate_pct_mean`
-- `paper_multi_scenario_table.csv`
-  - 从多场景原始 CSV 派生出的论文长表
-- `paper_multi_scenario_wide.csv`
-  - 将多场景成功率整理成宽表，更适合直接写入 LaTeX 总表
-- `logs/multi_scenario/...`
-  - 用于排查某个场景下的失败轮次
-  - 例如检查狭窄走廊里是否是全局路径、局部代价地图或动态障碍干扰导致失败
-
-从论文写作角度看，这一部分实验的目的不是重新做一整套大规模消融，而是：
-
-- 证明当前 `Full` 方法不只在十字交汇场景中有效
-- 证明它在空间受限和多障碍扰动下仍具备一定通过能力
-- 如果追加 `TEB`，还能进一步补充跨控制器的场景泛化对照
-
-#### 7.2 延迟统计与 TEB 对照
-
-为了支撑论文中的计算开销对比，当前代码里已经增加了运行时延迟日志：
-
-- `predictive_tracker`
-  - 周期性输出单帧跟踪耗时统计
-- `tcpa_dcpa_critic`
-  - 周期性输出单次 critic 评分耗时统计
-- `teb_local_planner`
-  - 周期性输出单次局部规划调用耗时统计
-
-这些日志主要用于填写论文中的 `Computational Overhead` 或 `Table III` 一类表格，用来回答两个问题：
-
-- 你的前端跟踪与 DWB critic 是否足够轻量
-- 相比 `TEB`，当前方法是否在保持通过能力的同时显著降低控制计算延迟
-
-为了便于直接整理实验表格，`run_ablation_eval.py` 当前也会把可解析到的延迟统计写入 CSV：
-
-- `ablation_trials.csv`
-  - `tracker_latency_ms`
-  - `algorithm_latency_ms`
-  - `algorithm_latency_source`
-- `ablation_results.csv`
-  - `tracker_latency_ms_mean / var`
-  - `algorithm_latency_ms_mean / var`
-  - `algorithm_latency_source`
-
-其中需要注意：
-
-- `Baseline` 由于没有自定义风险 critic，因此 `algorithm_latency_ms` 可能为空
-- `tracker_latency_ms` 当前依赖前端链路是否稳定输出可匹配的时间戳；若前端无有效样本，该列可能为空
-- 如果只在自动评测时出现大量空值，而手动仿真时前端正常，优先尝试：
-  - `python3 run_ablation_eval.py --trials-per-group 1 --pre-stack-gui`
-  - 确认 warning `Timed out waiting for /segmentation/obstacle samples` 是否消失
-- 因此论文里更稳妥的做法是：
-  - 把 `algorithm_latency_ms` 作为主延迟指标
-  - 把 `tracker_latency_ms` 视为可选补充项，只有在数据稳定时再纳入正文表格
-  - 若多场景下 tracker latency 出现明显离群值，优先采用主场景 `paper_overhead_table.csv` 作为正文延迟表
-  - 把 `collision_count` 和 `estimated minimum clearance` 继续保留在原始 CSV 中用于调试与现象分析，但不要强行作为当前论文主结论
-
-#### 7.2.1 当前这批实验结果如何用于论文
-
-如果你已经完成当前仓库中的正式跑数，那么推荐的取数口径是：
-
-- 主对照表
-  - 直接使用 `ablation_eval_output/paper_dynamic_test_table.csv`
-  - 对应 `dynamic_test` 主场景中的 `Baseline / RiskOnly / Full / TEB`
-  - 当前默认面向每组 `50` 次 trial 的统计
-- 计算开销表
-  - 直接使用 `ablation_eval_output/paper_overhead_table.csv`
-  - 推荐正文主指标写：
-    - `algorithm_latency_ms`
-    - `algorithm_latency_source`
-  - `tracker_latency_ms` 可作为补充说明或附表
-- 多场景表
-  - 使用 `ablation_eval_output/paper_multi_scenario_wide.csv`
-  - 当前更适合填写“多场景通过率/成功率”这一列
-  - 若需要保留每个场景的 trial 数与成功数，则查 `paper_multi_scenario_table.csv`
-
-当前不建议直接写进论文主表的指标包括：
-
-- `minimum_clearance_m`
-  - 目前很多轮次仍是估计量，而且会受跟踪误差影响
-- `collision_count`
-  - 当前定义基于“机体偏航异常”这一碰撞代理信号
-  - 对现象分析有帮助，但还不够适合作为唯一主结论指标
-
-因此，当前最稳妥的论文写法是：
-
-- 主表突出：
-  - `goal_reaching_rate_pct`
-  - `mean_navigation_time_s`
-  - `average_translational_speed_mps`
-  - `algorithm_latency_ms`
-- 将 `collision_count` 与 `estimated minimum clearance` 放在补充分析、附录或现象讨论中
-
-其中 `TEB` 组当前的定位是：
-
-- 一个额外的强基线
-- 用于和 `Full` 做“成功率 / 平均速度 / 延迟开销”三方面对照
-- 不替代 `Baseline / RiskOnly / Full` 这一组三段式消融链路
-
-### 8. 当前版本解决的问题与仍存在的问题
-
-#### 8.1 已经明显改善的问题
-
-- 幽灵动态障碍标记相比早期版本明显减少
-- 纯 TCPA/DCPA 导致的“原地僵住”现象有所缓解
-- 障碍从左右来袭时，机器人已经能够出现更明显的横移规避行为
-- 对“前方横穿障碍物”场景，机器人已开始出现更明确的“绕到障碍物后方通过”的趋势
-- 跟踪结果发布频率提升后，DWB 对动态障碍速度趋势的利用更稳定
-- 自动化消融实验脚本已经能够稳定输出按 trial 隔离的日志与统计结果
-- 多场景鲁棒性测试入口已经补齐，能够直接评测 `narrow_corridor` 与 `random_crowd`
-- 早期评测中出现过的“伪成功”与日志串轮问题已经被修正
-
-#### 8.2 当前仍需继续优化的问题
-
-- 仍存在一定比例的误识别动态障碍
-- 障碍转向时，tracker 仍可能短时掉跟踪
-- 某些侧向来袭场景下，机器人仍可能出现轻微犹豫
-- 在个别前方横穿场景下，机器人仍可能短暂出现“弱跟随”现象
-- critic 参数目前仍有较强任务场景依赖性
-
-#### 8.3 当前版本是否适合继续跑实验
-
-可以。
-
-但需要区分两种情况：
-
-- 如果你当前是继续完成“这一版改进算法”的主实验或补充实验，那么可以直接基于当前版本继续跑
-- 如果你想和之前已经保存结果的旧版 `Full` 做严格一一对应对比，那么需要把本次修改视为一个新的 `Full` 版本，重新完整跑一轮实验
-
-原因是：
-
-- 本次更新已经实质性改变了局部控制策略
-- 新增了 `rear_passing_penalty` 与 `swept_corridor_penalty`
-- 它们会直接影响前方横穿场景下的轨迹选择结果
-
-因此更稳妥的做法是：
-
-- 从现在开始冻结这一版参数与代码
-- 后续所有正式统计都基于这一固定版本完成
-- 不再把这版结果与更早未包含“后穿优先 / 扫掠走廊偏好”的 `Full` 结果混合统计
-
-因此，当前系统更适合表述为：
-
-- 一个已经能稳定运行的动态障碍预测局部控制原型
-- 而不是已经完全定型的最终算法
-
-### 9. 论文撰写建议
-
-`current.md` 当前最大的偏差，不是核心方法公式，而是少数实现细节和实验表述还没有和你现在的实际系统完全对齐。下面按你现有 LaTeX 结构给出直接修改建议，并尽量遵循“小改动”原则。
-
-#### 9.1 总体原则
-
-- 可以继续写 `Point-LIO + ICP` 参与实际导航闭环
-- 需要把障碍分割模块从 `terrain_analysis` 统一改成 `linefit_ground_segmentation_ros`
-- 方法章节可以按“实际导航系统”描述，实验章节再单独说明当前验证主要在仿真中完成
-- 如果你现在只有仿真结果，就不要写“comprehensive hardware experiments were conducted”
-- 如果表格数值和图像还没最终统计，不要先写死具体成功率、平均速度、jerk 数值
-
-更稳妥的论文表述应该是：
-
-- 理论主线仍然是 `TCPA/DCPA` 各向异性时空风险场
-- 系统主线可以继续写成 `Point-LIO + ICP + dynamic obstacle segmentation + predictive tracker + DWB critic`
-- 但要把动态障碍分割模块名称更新为 `linefit`
-- 为了解决联调中暴露出的犹豫和侧向来袭停滞问题，在基础风险项外增加了若干控制代价增强项
-
-#### 9.2 Abstract 该怎么改
-
-`current.md` 里的摘要还是占位文本，必须替换。
-
-建议摘要写成四句结构：
-
-1. 先写问题：
-   在动态环境中，传统 DWB 仅基于空间距离评估局部轨迹，容易出现 freezing robot problem 与速度犹豫。
-2. 再写方法：
-   本文提出一个基于 `TCPA/DCPA` 的各向异性时空风险场，并通过轻量级动态障碍跟踪器为 DWB 提供障碍物速度估计。
-3. 再写工程增强：
-   在基础风险项之外，进一步引入 hesitation suppression、lateral escape encouragement、goal-progress bias、direction-flip suppression 等附加代价，以缓解侧向来袭场景中的前后抖动。
-4. 最后写实验结论：
-   在 Gazebo 动态障碍仿真中，与 DWB baseline 相比，所提方法在通过率、平均速度、轨迹连续性和局部犹豫行为上表现更优。
-
-如果你暂时还没有实车结果，摘要结尾就写：
-
-- `Simulation results demonstrate ...`
-
-不要写：
-
-- `hardware experiments demonstrate ...`
-
-#### 9.3 Introduction 该替换什么
-
-`Introduction` 前两段可以保留主问题意识，但第三段需要改。
-
-当前版本中这句需要替换：
-
-- `By actively predicting the velocity vectors of dynamic obstacles via a lightweight Extended Kalman Filter (EKF) and VoxelGrid optimization ... comprehensive hardware experiments were conducted ...`
-
-建议改成更符合当前实现的表述：
-
-- 将 `Extended Kalman Filter (EKF)` 改成 `a lightweight constant-velocity Kalman filtering pipeline`
-- 如果你当前这版论文结果主要还是仿真，就把 `hardware experiments` 改成 `high-fidelity Gazebo simulation experiments`
-- 点明当前方法不是单纯“预测风险”，而是“risk-aware and hesitation-suppressing local planning`
-
-Introduction 最后一段建议改成：
-
-- 本文提出一个面向移动机器人导航系统的预测型局部规划框架
-- 前端使用轻量级聚类与常速度 Kalman 跟踪估计动态障碍速度
-- 后端将 TCPA/DCPA 风险项注入 DWB 评分链
-- 并针对联调中出现的局部停滞与方向反复切换问题增加附加控制代价
-
-#### 9.4 Related Work 该补什么
-
-你现在的 Related Work 太“教科书式”，还没有把你的工作放到正确位置。
-
-建议补两点：
-
-- 在 `Local Trajectory Planning` 小节最后补一句：
-  你的方法不是替代 DWB，而是在 DWB 采样评分框架中加入动态风险感知 critic
-- 在 `Predictive Collision Avoidance` 小节最后补一句：
-  你的方法与 MPC 的区别在于不进行重优化，而是保留 DWB 的速度采样框架，以较低计算代价实现预测规避
-
-这样能更清楚地定义你的工作边界：
-
-- 不是全新 local planner
-- 是 DWB 上的预测型 critic 增强
-
-#### 9.5 Proposed Methodology 该怎么改
-
-##### A. System Overview
-
-这一段不需要彻底重写，但要做一处关键对齐。
-
-当前文中建议修改的核心只有一处：
-
-- 把 `terrain analysis module` 改成 `linefit-based ground/obstacle segmentation module`
-
-如果你论文的系统图和方法章节描述的是“实际导航系统”，那么这些内容可以保留：
-
-- `Point-LIO` 作为导航状态估计主来源
-- `ICP` 参与导航闭环
-- `global localization are provided by ...`
-
-但建议把文字改得更稳妥一些，例如：
-
-- `High-frequency state estimation is provided by the Point-LIO odometry pipeline, while ICP-based registration is used within the navigation loop for localization refinement.`
-
-同时在图或图注里把障碍物分割链明确写成：
-
-- `Point-LIO -> linefit segmentation -> predictive_tracker -> TCPADCPA critic`
-
-如果图中目前画的是 `terrain analysis`，直接替换成 `linefit segmentation` 即可。其余主干结构不必大改。
-
-##### B. Lightweight Dynamic Obstacle Tracking
-
-这一节的主体可以保留，但有两点建议改：
-
-- 把 `EKF` 改成更保守的 `Kalman filter with a constant-velocity model`
-- 把 `terrain analysis module` 改成 `linefit-based obstacle segmentation output`
-- 增加当前代码里真实存在的抗误识别机制
-
-建议新增一句或一小段，写明：
-
-- 轨迹只有在累计命中帧数足够时才被确认
-- 只有连续满足动态速度阈值的轨迹才作为动态障碍发布
-- 在短时丢帧时保留有限步预测发布，以减轻障碍转向导致的短时掉跟踪
-
-这三点非常重要，因为它们正是你当前实现相对最初论文草案最大的工程修正之一。
-
-##### C. Anisotropic Spatiotemporal Risk Field
-
-这一节的基础公式基本可以保留，但建议增加一个新的小段落，名称可以叫：
-
-- `Engineering Extensions for Hesitation Suppression`
-
-这一小段专门写：
-
-- 基础 `TCPA/DCPA` 风险项只能表达“是否接近、何时接近、最近距离多大”
-- 但不能充分约束机器人在侧向来袭场景下的逃逸方向选择
-- 因此本文进一步在紧急交互条件下引入了低速犹豫惩罚、横向逃逸惩罚、目标推进惩罚、逃逸方向对齐惩罚和速度方向翻转惩罚
-
-这里不必把所有工程项都写成复杂大公式，否则论文会显得很散。建议做法是：
-
-- 主文保留基础风险公式
-- 用一段文字说明附加项的作用
-- 如果篇幅允许，可给出总评分形式：
-
-```text
-C = C_risk + C_hesitation + C_escape + C_progress + C_alignment + C_flip
-```
-
-同时还要补一句当前实现特征：
-
-- 当前 critic 对每个动态障碍只在轨迹起点计算一次风险，从而将计算复杂度控制在近似 `O(M)`
-
-#### 9.6 Experiments and Results 该怎么改
-
-这是 `current.md` 里问题最大的一节，因为你现在写的是“硬件实验已经做完”的口气，但你当前主结果明显还是仿真。
-
-##### A. Experimental Testbed Setup
-
-如果当前主要结果来自仿真，建议只把“实验设置”这部分改成仿真口径，而不是把整篇方法章节都改成仿真架构。
-
-- `Simulation Platform and Evaluation Setup`
-
-并明确写：
-
-- 实验在 Gazebo 动态障碍场景中完成
-- 机器人为全向移动底盘，不考虑原地旋转规避
-- 动态障碍识别链为 `Point-LIO -> linefit -> predictive_tracker`
-- 障碍物在首次下发导航目标后才开始运动，以支持单变量消融实验
-- 除主十字交汇场景外，还补充了 `narrow_corridor` 与 `random_crowd` 两个鲁棒性测试场景
-
-如果你想更严谨一点，可以补一句区分：
-
-- `In the current simulation setup, Gazebo provides the odometry used for evaluation, while the full real-system architecture still relies on Point-LIO and ICP-based localization.`
-
-##### B. Qualitative Analysis
-
-这一节建议不要只做二分类对比：
-
-- `Standard DWB`
-- `Proposed Method`
-
-建议改成三组：
-
-- `DWB Baseline`
-- `DWB + RiskOnly`
-- `Full Method`
-
-这样更有说服力，因为它能说明：
-
-- 仅仅加入基础风险项是否足够
-- 你的附加代价项是否真的缓解了犹豫问题
-
-图注也建议改掉，别再写“perfectly preserving momentum”这种太满的话。更稳的写法是：
-
-- `The full method shows fewer hesitation oscillations and more decisive lateral escape behavior.`
-
-##### C. Quantitative Analysis
-
-现在表格里的这些数字如果还不是最终统计结果，就先删掉，不要保留虚拟数值。
-
-建议最终定量表至少包含这些指标：
-
-- Success rate
-- Collision count
-- Average translational speed
-- Mean navigation time
-- Minimum clearance to dynamic obstacles
-- Hesitation count
-  - 可以定义为短时间窗口内 `cmd_vel` 方向反复翻转次数
-- Tracking availability
-  - 如 `/tracked_obstacles` 在动态交互段内的有效发布率
-
-另外建议单独加一个简短的小表或附加列：
-
-- `Performance in Multi-Scenarios`
-  - 记录 `narrow_corridor` 与 `random_crowd` 两个场景下的成功率
-  - 这一部分不必再跑完整三组消融，至少给出 `Full` 的成功率即可
-  - 如果你想进一步体现优势，也可以再补 `TEB` 的同场景成功率
-
-如果你想突出“平滑性”，与其直接写 jerk，不如同时加一个更贴近你问题本身的指标：
-
-- velocity sign-flip count
-
-因为你当前真正要解决的是“前后犹豫”和“停在原地抖动”，这个指标比 jerk 更贴题。
-
-#### 9.7 Conclusion 该怎么改
-
-结论段现在最大的问题是把结论说满了，而且继续写成了“real-world validations confirm”。
-
-建议改成：
-
-- 本文在 DWB 中引入了基于 TCPA/DCPA 的时空风险评估机制
-- 并通过轻量级动态跟踪与若干控制增强项缓解了动态障碍交互中的 freezing 与 hesitation 问题
-- Gazebo 仿真结果表明该方法在动态交互场景中优于 DWB baseline
-- 未来工作再写：更强的目标运动预测、误识别抑制、实车验证
-
-不要现在就写：
-
-- `real-world validations confirm ...`
-
-除非你后面真的补上了实车实验。
-
-#### 9.8 最建议你立刻在 `current.md` 里做的替换
-
-优先级最高的替换有 6 处：
-
-1. 把所有 `EKF` 改成更稳妥的 `Kalman filter with a constant-velocity model`
-2. 把所有 `LIO + ICP` 共同提供导航状态的描述，改成当前仿真真实配置
-3. 把所有 `terrain analysis` 主分割描述，改成当前的 `linefit_ground_segmentation_ros`
-4. 把所有 `terrain analysis` 主分割描述改成 `linefit_ground_segmentation_ros`
-5. 在方法章节加入“附加控制代价用于抑制犹豫与鼓励逃逸”的说明
-6. 把实验对比从两组改成三组：
-   `Baseline / RiskOnly / Full`
-
-如果只做这几处小改动，你这份论文内容就会和当前实现基本对齐，同时不会破坏你原本按实际导航系统组织的方法主线。
-
-### 10. 一句话总结当前版本
-
-当前版本不是“只把 TCPA/DCPA 公式接进 DWB”那么简单，而是：
-
-一个以 `TCPA/DCPA` 预测风险为核心、以 `predictive_tracker` 为前端、并通过附加控制代价抑制局部犹豫行为的动态环境全向导航系统。
-
-这个“学术包装”的战略调整极其关键！在科研界，这不仅是文字游戏，更是一种**将具体工程抽象为通用理论**的高级能力。
-
-为了确保你的大创项目（蛇形机器人复杂地形探索）能够顺利结项，同时又能完美利用你现在已经跑通的 RoboMaster 哨兵机器人（全向底盘）的代码和数据，我们需要在整篇论文中贯彻一个核心逻辑：
-
-**“我们的算法是为了解决复杂运动学机器人（如蛇形）在动态环境中需要极度平滑、连续轨迹的痛点而设计的通用框架。为了验证该算法在极限动态博弈下的鲁棒性，我们采用了一个高机动轮式平台作为通用测试床（General Testbed）。”**
-
-基于这个全新的前提，我为你重新制定了这篇 EI 会议论文的**总体撰写规划与战略大纲**。
-
-------
-
-### 🏷️ 核心基调与论文定名
-
-**绝对避坑：** 全文（除了实验硬件介绍部分）**严禁**出现 “Omnidirectional (全向)” 或 “RoboMaster Sentry (哨兵)” 这样的字眼，替换为 “Highly Maneuverable Robot (高机动机器人)” 或 “Mobile Robot (移动机器人)”。
-
-**推荐论文标题：**
-
-> *Anisotropic Spatiotemporal Risk Field for Smooth Predictive Navigation of Mobile Robots in Dynamic Environments*
->
-> (面向动态环境下移动机器人平滑预测导航的各向异性时空风险场)
-
-------
-
-### 📝 论文结构蓝图 (预计 4-6 页，双栏排版)
-
-#### I. Introduction (引言) - *预计 1 页*
-
-这是整篇论文“圆谎”与“升华”的最重要阵地。
-
-- **动机 (Motivation)：** 强调在复杂地形或探索任务中，机器人（暗指蛇形等复杂机构）极其依赖**平滑且连续**的运动步态。频繁的急刹车会导致姿态失稳或能耗剧增。
-- **痛点 (Problem Statement)：** 抨击传统 DWB/DWA 算法的“时空错位”缺陷。它们仅依赖静态空间距离，面对高速非合作目标时，容易引发“冻结机器人综合征（Freezing Robot Problem）”，破坏运动的连续性。
-- **贡献 (Contributions)：**
-  1. 提出一种轻量级动态追踪前置节点（VoxelGrid + CV-EKF）。
-  2. 构建融合 TCPA（最近会遇时间）与 DCPA（最近会遇距离）的各向异性风险场。
-  3. **（关键话术）** 搭建高机动通用测试床，在算力受限的边缘设备上完成了 $O(M)$ 复杂度算法的极限工况验证。
-
-#### II. Related Work (相关工作) - *预计 0.5 页*
-
-- **局部避障的演进：** 从传统的 DWA 到现代的预测型导航。
-- **跨领域方法的启发：** 提及航空航天或自动驾驶领域的 TTC/TCPA 概念，引出将高阶运动学博弈引入机器人底层控制的必要性。
-
-#### III. Proposed Methodology (提出方法) - *预计 1.5 页 (★ 核心重头戏)*
-
-无论硬件怎么变，你的数学推导是无懈可击的。
-
-- **A. System Overview (系统概述)：** 放置包含 Point-LIO、地形分割、动态追踪与 TCPA-DWB 的全栈数据流向图。
-- **B. Lightweight Dynamic Obstacle Tracking (轻量级动态追踪)：** 详细描述如何为了保护边缘算力，使用体素降采样，并通过欧氏聚类与扩展卡尔曼滤波提取高置信度速度矢量。
-- **C. Anisotropic Spatiotemporal Risk Field (各向异性时空风险场)：** 这是得分点。展示如何将原本 $O(N \times M)$ 的计算降维至 $O(M)$。列出相对运动学公式，推导 TCPA 与 DCPA，并给出最终的二维高斯风险代价函数。
-
-#### IV. Experiments and Results (实验与结果) - *预计 1.5 页*
-
-- **A. Experimental Testbed Setup (实验测试床设置)：**
-  - **话术包装：** “为了验证所提算法在极端动态环境下的避障极限与实时性，本文采用搭载 NUC 边缘计算单元和 3D LiDAR 的高机动底盘作为硬件测试平台。” （在这里正常介绍你的硬件配置，证明实验的真实性）。
-- **B. Qualitative Analysis (定性分析)：** 贴出实车跑出来的轨迹对比图。重点对比原生 DWB 的“急刹抽搐”与你算法的“平滑连续规避”轨迹。
-- **C. Quantitative Analysis (定量分析)：** 利用表格对比成功率、平均通行速度、轨迹平滑度（如加速度变化率 Jolt）以及 CPU 占用率。
-
-#### V. Conclusion (结论) - *预计 0.25 页*
-
-- 总结 TCPA-DCPA 模型如何完美解决了传统算法的误刹车问题，并强调整套轻量级框架在各种需要连续平滑运动的复杂机器人平台上具有广泛的应用前景（强行扣回大创主题）。
+Issues and pull requests are welcome.
